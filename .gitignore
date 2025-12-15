@@ -20,6 +20,11 @@ out/
 .vscode/
 .idea/
 
+# Agent tooling (local-only)
+.claude/
+workspaces/
+worktrees/
+
 # Logs
 *.log
 npm-debug.log*

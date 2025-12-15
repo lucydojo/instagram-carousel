@@ -1,6 +1,6 @@
 # Tech Stack
 
-This document records the complete tech stack for the Instagram Carousel Maker. The stack leverages TypeScript/Next.js defaults with specific additions for AI image generation (nano banana pro), text generation, Instagram API integration, and scheduling.
+This document records the complete tech stack for Dojogram. The stack leverages TypeScript/Next.js defaults and uses Supabase for database, authentication, and file storage, with specific additions for AI image generation (nano banana pro), text generation, Instagram API integration, and scheduling.
 
 ## Language & Runtime
 - **TypeScript** - Primary language for type safety across frontend and backend
@@ -16,14 +16,17 @@ This document records the complete tech stack for the Instagram Carousel Maker. 
 - **Framer Motion** (optional) - Animation library for demo-quality polish and smooth transitions
 
 ## Data & Persistence
-- **PostgreSQL** - Primary relational database
-- **Prisma** - Type-safe ORM and database toolkit
+- **Supabase Postgres** - Primary relational database
+- **Supabase CLI migrations** - Schema migrations and local development workflow
+- **Row Level Security (RLS)** - Multi-tenant access control for workspaces and connected Instagram accounts
+- **Typed access** - Prefer `supabase-js` with generated TypeScript types for end-to-end type safety
 
 ## File Storage
-- **S3-compatible object storage** (AWS S3 or Cloudflare R2) - For storing generated carousel images, reference images, exported assets, and user uploads
+- **Supabase Storage** - For generated carousel images, reference images, exported assets, and user uploads (use signed URLs for private assets)
 
 ## Authentication & User Management
-- **Auth.js (NextAuth)** - Authentication solution with session management
+- **Supabase Auth** - Authentication and session management
+- **Supabase SSR (Next.js)** - Server-side auth/session handling for Next.js
 - **Workspace model** - Multi-tenant data structure for team collaboration and multi-account organization
 
 ## AI Services
@@ -33,8 +36,8 @@ This document records the complete tech stack for the Instagram Carousel Maker. 
 - Integration via API (implementation details TBD based on nano banana pro documentation)
 
 ### Text Generation & Analysis
-- **OpenAI API** or **Anthropic Claude API** - For generating carousel copy, captions, hooks, and natural language editing commands
-- **Alternative:** Google Gemini API for multimodal capabilities
+- **Google Gemini API** - Preferred (aligns with nano banana pro being a Gemini image model)
+- **Alternative:** OpenAI API or Anthropic Claude API
 - Used for:
   - Carousel copy generation from prompts
   - Caption and hashtag generation
@@ -69,13 +72,14 @@ This document records the complete tech stack for the Instagram Carousel Maker. 
   - Support for Business and Creator accounts
 
 ### Scheduling
-- **Background job queue** - For scheduled post publication
-  - **BullMQ** + **Redis** - Robust queue system with retry logic and scheduling
-  - Alternative: **Inngest** - Serverless job scheduling platform
+- **Supabase-backed scheduling** - Store scheduled posts in Postgres and publish via a scheduled job runner
+  - **Supabase Edge Functions** (or Next.js server routes) for the publishing worker
+  - **Cron trigger** (e.g., scheduled invocation) to publish due posts
+  - Optional: add a dedicated queue (BullMQ/Redis or Inngest) if volume/retries require it
 
 ## Background Processing & Performance
-- **Redis** - Caching and job queue management
-- **BullMQ** or **Inngest** - Background job processing for:
+- **Supabase Edge Functions** (or server routes) - Background processing entrypoints
+- **Optional queue** (BullMQ/Redis or Inngest) - Background job processing for:
   - Multi-slide AI generation
   - Image rendering and export
   - Scheduled post publishing
@@ -114,4 +118,4 @@ This document records the complete tech stack for the Instagram Carousel Maker. 
 - All AI services require API key configuration
 - Instagram API integration requires app registration with Meta and user OAuth flow
 - nano banana pro integration details depend on service API documentation
-- Scheduling system requires persistent job queue (Redis + BullMQ recommended)
+- Scheduling can start Supabase-first (Postgres + cron + worker) and upgrade to a queue when needed
