@@ -57,6 +57,7 @@ For the Dojo demo instance, we can seed initial super admins via configuration (
 ### Requirements
 - One workspace per user for MVP, but **workspace must support multiple users**
 - Keep schema extensible for roles later (owner/admin/member), but do not enforce role-based permissions yet
+- View-only sharing for carousel projects: workspace members can see all carousels, but only edit their own (enforced by RLS; roles can extend later)
 
 ### Data model (minimum)
 - `workspaces`
@@ -66,6 +67,10 @@ For the Dojo demo instance, we can seed initial super admins via configuration (
 RLS enforced on all workspace-scoped tables using membership:
 - A user can only read/write rows where they are a member of the row’s `workspace_id`
 - Pattern: every core row includes `workspace_id`
+
+For user-owned resources inside a workspace (e.g., carousel projects), RLS should differentiate:
+- **read**: any workspace member
+- **write**: only the owning user (until roles/collaboration are added)
 
 ## Storage (Supabase Storage)
 ### Requirements
