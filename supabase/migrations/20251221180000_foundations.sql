@@ -59,6 +59,34 @@ as $$
   select exists (select 1 from public.allowlisted_emails ae where lower(ae.email) = lower(p_email));
 $$;
 
+create or replace function public.is_workspace_member(p_workspace_id uuid, p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.workspace_members wm
+    where wm.workspace_id = p_workspace_id
+      and wm.user_id = p_user_id
+  );
+$$;
+
+create or replace function public.default_workspace_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select w.id
+  from public.workspaces w
+  order by w.created_at asc
+  limit 1;
+$$;
+
 -- Workspaces
 create table if not exists public.workspaces (
   id uuid primary key default gen_random_uuid(),
@@ -70,7 +98,19 @@ create table if not exists public.workspaces (
 );
 
 -- Workspace membership (role reserved for future)
-create type public.workspace_role as enum ('owner', 'member', 'admin');
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_type t
+    join pg_namespace n on n.oid = t.typnamespace
+    where n.nspname = 'public'
+      and t.typname = 'workspace_role'
+  ) then
+    create type public.workspace_role as enum ('owner', 'member', 'admin');
+  end if;
+end;
+$$;
 
 create table if not exists public.workspace_members (
   workspace_id uuid not null references public.workspaces (id) on delete cascade,
@@ -233,12 +273,8 @@ on public.workspaces
 for select
 to authenticated
 using (
-  exists (
-    select 1
-    from public.workspace_members wm
-    where wm.workspace_id = workspaces.id
-      and wm.user_id = auth.uid()
-  )
+  public.is_super_admin(auth.uid())
+  or public.is_workspace_member(workspaces.id, auth.uid())
 );
 
 drop policy if exists workspaces_super_admin_write on public.workspaces;
@@ -264,12 +300,8 @@ on public.workspace_members
 for select
 to authenticated
 using (
-  exists (
-    select 1
-    from public.workspace_members wm
-    where wm.workspace_id = workspace_members.workspace_id
-      and wm.user_id = auth.uid()
-  )
+  public.is_super_admin(auth.uid())
+  or public.is_workspace_member(workspace_members.workspace_id, auth.uid())
 );
 
 drop policy if exists workspace_members_manage_super_admin on public.workspace_members;
@@ -290,12 +322,7 @@ to authenticated
 with check (
   user_id = auth.uid()
   and public.is_email_allowlisted(auth.jwt() ->> 'email')
-  and workspace_id = (
-    select w.id
-    from public.workspaces w
-    order by w.created_at asc
-    limit 1
-  )
+  and workspace_id = public.default_workspace_id()
 );
 
 -- Carousels: view-only sharing (read for members; write for owner)
@@ -305,12 +332,8 @@ on public.carousels
 for select
 to authenticated
 using (
-  exists (
-    select 1
-    from public.workspace_members wm
-    where wm.workspace_id = carousels.workspace_id
-      and wm.user_id = auth.uid()
-  )
+  public.is_super_admin(auth.uid())
+  or public.is_workspace_member(carousels.workspace_id, auth.uid())
 );
 
 drop policy if exists carousels_owner_write on public.carousels;
@@ -328,12 +351,8 @@ on public.carousel_assets
 for select
 to authenticated
 using (
-  exists (
-    select 1
-    from public.workspace_members wm
-    where wm.workspace_id = carousel_assets.workspace_id
-      and wm.user_id = auth.uid()
-  )
+  public.is_super_admin(auth.uid())
+  or public.is_workspace_member(carousel_assets.workspace_id, auth.uid())
 );
 
 drop policy if exists carousel_assets_owner_write on public.carousel_assets;
@@ -378,33 +397,7 @@ as $$
   select substring(path from '^workspaces/([0-9a-fA-F-]{8}-[0-9a-fA-F-]{4}-[0-9a-fA-F-]{4}-[0-9a-fA-F-]{4}-[0-9a-fA-F-]{12})/')::uuid;
 $$;
 
-alter table storage.objects enable row level security;
-
-drop policy if exists storage_objects_workspace_member_read on storage.objects;
-create policy storage_objects_workspace_member_read
-on storage.objects
-for select
-to authenticated
-using (
-  bucket_id in ('workspace-logos', 'carousel-assets')
-  and exists (
-    select 1
-    from public.workspace_members wm
-    where wm.workspace_id = public.workspace_id_from_storage_path(name)
-      and wm.user_id = auth.uid()
-  )
-);
-
-drop policy if exists storage_objects_workspace_owner_write on storage.objects;
-create policy storage_objects_workspace_owner_write
-on storage.objects
-for all
-to authenticated
-using (
-  bucket_id in ('workspace-logos', 'carousel-assets')
-  and owner = auth.uid()
-)
-with check (
-  bucket_id in ('workspace-logos', 'carousel-assets')
-  and owner = auth.uid()
-);
+-- NOTE: Supabase manages `storage.objects` ownership and RLS internally; applying policies via SQL migrations
+-- often fails in hosted projects. This app supports using `SUPABASE_SERVICE_ROLE_KEY` on the server for
+-- uploads + signed URLs. If you prefer client-side Storage access, create `storage.objects` policies in the
+-- Supabase Dashboard (Storage -> Policies) instead of here.

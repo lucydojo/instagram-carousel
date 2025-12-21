@@ -29,6 +29,9 @@ worktrees/
 *.log
 npm-debug.log*
 
+# Local dev server pid
+.dev.pid
+
 # Testing
 coverage/
 

@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 
 async function getSignedUrl(bucket: string, path: string) {
-  const supabase = await createSupabaseServerClient();
+  const admin = createSupabaseAdminClientIfAvailable();
+  const supabase = admin ?? (await createSupabaseServerClient());
   const { data, error } = await supabase.storage
     .from(bucket)
     .createSignedUrl(path, 60 * 10);

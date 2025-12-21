@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isCurrentUserSuperAdmin } from "@/lib/app/access";
+import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 
 async function updateWorkspace(formData: FormData) {
   "use server";
@@ -35,13 +36,20 @@ async function updateWorkspace(formData: FormData) {
     const extension = logoFile.name.split(".").pop() || "png";
     const path = `workspaces/${workspace.id}/branding/logo-${crypto.randomUUID()}.${extension}`;
 
-    const { error: uploadError } = await supabase.storage
+    const admin = createSupabaseAdminClientIfAvailable();
+    const storageClient = admin ?? supabase;
+
+    const { error: uploadError } = await storageClient.storage
       .from("workspace-logos")
       .upload(path, logoFile, { upsert: true, contentType: logoFile.type });
 
     if (uploadError) {
+      const message =
+        !admin && uploadError.message.toLowerCase().includes("row-level")
+          ? `${uploadError.message} (Set SUPABASE_SERVICE_ROLE_KEY or add Storage policies for authenticated uploads.)`
+          : uploadError.message;
       redirect(
-        `/app/admin/workspace?error=${encodeURIComponent(uploadError.message)}`
+        `/app/admin/workspace?error=${encodeURIComponent(message)}`
       );
     }
 

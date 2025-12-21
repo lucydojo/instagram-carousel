@@ -206,6 +206,10 @@ export type Database = {
         Args: { p_email: string };
         Returns: boolean;
       };
+      default_workspace_id: {
+        Args: Record<string, never>;
+        Returns: string | null;
+      };
       workspace_id_from_storage_path: {
         Args: { path: string };
         Returns: string | null;

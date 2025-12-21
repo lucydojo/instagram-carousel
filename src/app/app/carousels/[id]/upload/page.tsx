@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 
 async function uploadReference(params: { id: string }, formData: FormData) {
   "use server";
@@ -27,13 +28,20 @@ async function uploadReference(params: { id: string }, formData: FormData) {
     const ext = file.name.split(".").pop() || "bin";
     const path = `workspaces/${carousel.workspace_id}/carousels/${carousel.id}/reference/${crypto.randomUUID()}.${ext}`;
 
-    const { error: uploadError } = await supabase.storage
+    const admin = createSupabaseAdminClientIfAvailable();
+    const storageClient = admin ?? supabase;
+
+    const { error: uploadError } = await storageClient.storage
       .from("carousel-assets")
       .upload(path, file, { upsert: false, contentType: file.type });
 
     if (uploadError) {
+      const message =
+        !admin && uploadError.message.toLowerCase().includes("row-level")
+          ? `${uploadError.message} (Set SUPABASE_SERVICE_ROLE_KEY or add Storage policies for authenticated uploads.)`
+          : uploadError.message;
       redirect(
-        `/app/carousels/${params.id}?error=${encodeURIComponent(uploadError.message)}`
+        `/app/carousels/${params.id}?error=${encodeURIComponent(message)}`
       );
     }
 

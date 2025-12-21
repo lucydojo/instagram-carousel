@@ -49,16 +49,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   // Attempt self-join to default workspace for allowlisted users (ignore errors).
   if (!workspaceId && allowlisted) {
-    const { data: defaultWorkspace } = await supabase
-      .from("workspaces")
-      .select("id")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (defaultWorkspace?.id) {
+    const { data: defaultWorkspaceId } =
+      await supabase.rpc("default_workspace_id");
+    if (defaultWorkspaceId) {
       await supabase.from("workspace_members").insert({
-        workspace_id: defaultWorkspace.id,
+        workspace_id: defaultWorkspaceId,
         user_id: data.user.id,
         role: "member"
       });
