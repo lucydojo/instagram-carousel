@@ -1,7 +1,7 @@
 # Product Mission
 
 ## Pitch
-Instagram Carousel Maker is an AI-powered content creation platform that helps AI/automation agency teams create stunning Instagram carousel posts by generating complete multi-slide carousels (images + copy) from a simple prompt and reference style, with natural language editing and direct Instagram publishing - eliminating hours of manual design work.
+Dojogram is an AI-powered carousel design studio that helps AI/automation teams create stunning Instagram carousel posts by generating complete multi-slide carousels (images + copy) from a prompt, optional reference style, and structured “optimization options”, with a canvas-like editor for iterative refinement — reducing hours of manual work to minutes.
 
 ## Users
 
@@ -26,7 +26,7 @@ Instagram Carousel Maker is an AI-powered content creation platform that helps A
 ### High-Effort Carousel Creation and Manual Publishing
 Instagram carousels are time-consuming to design and write, especially when output quality must be consistently high across multiple accounts. The process involves coordinating design tools, writing copy, ensuring visual consistency, downloading files, and manually uploading to Instagram. This reduces publishing velocity, makes iteration expensive, and creates workflow bottlenecks.
 
-**Our Solution:** Generate complete, editable carousels from a theme and reference post style inspiration, allow fast iteration using natural language commands, and publish directly to multiple Instagram accounts with scheduling capabilities - reducing creation time from hours to minutes.
+**Our Solution:** Generate complete, editable carousels from a theme (and optional reference style inspiration), guide generation with structured optimization options (platform, tone, audience, language, presets), and let users refine output in a canvas-like editor with selectable elements and natural-language changes.
 
 ## Differentiators
 
@@ -44,7 +44,9 @@ Unlike content creation tools that require downloading files and manual Instagra
 ### Core Features
 - **AI-Powered Generation:** Enter a prompt/theme/idea and get a complete multi-slide carousel with AI-generated images (via nano banana pro) and compelling copy
 - **Style Mimicking:** Upload or reference existing Instagram carousel posts to replicate their visual style, layout, colors, and typography in new content
-- **Content Management:** Edit individual slides, modify text, and customize images through an intuitive visual interface
+- **Canvas-like editing:** Edit text and elements directly on a slide canvas (selectable objects), reorder slides, and refine layout while keeping style consistent
+- **Optimization options + presets:** Guide generation with platform, tone/mood, target audience, language, and reusable presets for consistent output
+- **Templates + custom templates:** Start from built-in templates and import/save custom templates for repeatable carousel structures
 
 ### Workflow Features
 - **Natural Language Editing:** Refine generated content using conversational commands instead of manual editing tools
@@ -53,4 +55,6 @@ Unlike content creation tools that require downloading files and manual Instagra
 
 ### Advanced Features
 - **Post Scheduling:** Schedule carousel posts for future publication to maintain consistent posting cadence across accounts
+- **Creator info block:** Optionally include a creator attribution section (name/handle/role) that can be toggled and edited
+- **Color palette control:** Define and reuse a palette to keep typography/background/accents consistent across slides
 - **Demo-Quality Visual Appeal:** Polished, professional UI that showcases AI capabilities and serves as a portfolio piece for the agency
