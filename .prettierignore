@@ -1,0 +1,12 @@
+agent-os/
+workspaces/
+worktrees/
+.claude/
+supabase/migrations/
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+
