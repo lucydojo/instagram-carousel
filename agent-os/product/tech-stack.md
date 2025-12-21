@@ -27,7 +27,10 @@ This document records the complete tech stack for Dojogram. The stack leverages 
 ## Authentication & User Management
 - **Supabase Auth** - Authentication and session management
 - **Supabase SSR (Next.js)** - Server-side auth/session handling for Next.js
-- **Workspace model** - Multi-tenant data structure for team collaboration and multi-account organization
+- **Custom Auth UI** - Glassmorphic design (split-screen layout, glass effects, staggered animations) built with React/Tailwind, calling Supabase Auth methods
+- **First-run setup wizard** - Detect empty database, guide super admin + workspace creation for Lovable forks
+- **Workspace model** - Multi-tenant data structure with view-only sharing (members see all carousels, only edit their own)
+- **Closed demo allowlist** - Allowlist + instance-level "super admin" accounts to control access (expandable to roles later)
 
 ## AI Services
 
@@ -53,10 +56,15 @@ This document records the complete tech stack for Dojogram. The stack leverages 
 ## Carousel Editor & Rendering
 
 ### Interactive Editor
-- **React-based canvas editor** with options:
-  - **Konva.js** or **Fabric.js** - Canvas manipulation libraries
-  - **DOM-based editor** - Alternative HTML/CSS-based approach
-- Supports drag-and-drop, text editing, image replacement, and layout adjustments
+- **Fabric.js** - Canvas manipulation library (chosen for stronger text editing capabilities and better documentation for carousel-style layouts)
+- **React integration** - Fabric.js wrapped in React components for state management
+- Supports:
+  - Drag-and-drop element positioning
+  - Direct text editing on canvas
+  - Selectable objects (text, images, shapes)
+  - Global editing (color palette affects all slides)
+  - Per-slide editing (customize individual slides)
+  - Element locking (lock icon to protect elements from AI edits)
 
 ### Export Rendering
 - **Puppeteer** or **Playwright** - Headless browser for server-side high-resolution rendering of carousel slides to PNG/JPG
@@ -102,7 +110,7 @@ This document records the complete tech stack for Dojogram. The stack leverages 
 ### Required
 - **Meta/Instagram Graph API** - Direct Instagram publishing
 - **nano banana pro API** - Image generation
-- **OpenAI API** or **Anthropic Claude API** - Text generation and natural language processing
+- **Google Gemini API** - Text generation and natural language processing (primary choice, aligns with nano banana pro)
 
 ### Optional
 - **Postmark** or **SendGrid** - Transactional email (notifications, alerts)
