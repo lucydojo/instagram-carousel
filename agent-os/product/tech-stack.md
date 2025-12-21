@@ -15,6 +15,10 @@ This document records the complete tech stack for Dojogram. The stack leverages 
 - **shadcn/ui + Radix UI** - Component library for accessible, composable UI primitives
 - **Framer Motion** (optional) - Animation library for demo-quality polish and smooth transitions
 
+## Canvas Editor (core UX)
+- **Canvas editor library:** Konva.js or Fabric.js (decision in implementation based on editing needs)
+- **Element model:** Text, shapes, images as selectable objects (enables template-based layouts and AI-driven modifications later)
+
 ## Data & Persistence
 - **Supabase Postgres** - Primary relational database
 - **Supabase CLI migrations** - Schema migrations and local development workflow
@@ -28,6 +32,7 @@ This document records the complete tech stack for Dojogram. The stack leverages 
 - **Supabase Auth** - Authentication and session management
 - **Supabase SSR (Next.js)** - Server-side auth/session handling for Next.js
 - **Workspace model** - Multi-tenant data structure for team collaboration and multi-account organization
+- **Closed demo allowlist** - Allowlist + instance-level “super admin” accounts to control who can access the app (expandable to roles later)
 
 ## AI Services
 
