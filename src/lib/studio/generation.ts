@@ -4,7 +4,7 @@ import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { CarouselEditorState } from "@/lib/db/types";
 import { geminiGenerateJson } from "@/lib/ai/gemini";
-import { nanoBananaProGenerateImage } from "@/lib/ai/nano_banana_pro";
+import { geminiNanoBananaGenerateImage } from "@/lib/ai/gemini_image";
 import {
   generationResultSchema,
   type GenerationResult
@@ -209,10 +209,10 @@ export async function generateFirstDraftForCarousel(carouselId: string) {
   const generatedAssets: Array<{ slideIndex: number; path: string }> = [];
   for (const slide of gen.data.slides) {
     const prompt = slide.imagePrompt ?? "";
-    const image = await nanoBananaProGenerateImage({
-      prompt: prompt || `Imagem abstrata para o slide ${slide.index} do carrossel: ${gen.data.title}`,
-      width: 1080,
-      height: 1080
+    const image = await geminiNanoBananaGenerateImage({
+      prompt:
+        (prompt || `Imagem para o slide ${slide.index} do carrossel: ${gen.data.title}`) +
+        "\n\nRequisitos: 1080x1080, sem texto na imagem."
     });
 
     if (!image.ok) continue;
@@ -247,6 +247,7 @@ export async function generateFirstDraftForCarousel(carouselId: string) {
       status: "ready",
       metadata: {
         provider: image.provider,
+        model: image.model,
         slideIndex: slide.index,
         prompt: slide.imagePrompt ?? null
       }

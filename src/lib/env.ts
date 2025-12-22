@@ -7,8 +7,7 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
-  NANO_BANANA_PRO_API_URL: z.string().url().optional(),
-  NANO_BANANA_PRO_API_KEY: z.string().min(1).optional()
+  GEMINI_IMAGE_MODEL: z.string().min(1).optional()
 });
 
 type Env = z.infer<typeof envSchema>;
