@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { getStudioProject } from "@/lib/studio/queries";
-import { saveCarouselEditorStateFromForm } from "@/lib/studio/actions";
+import { generateFirstDraft, saveCarouselEditorStateFromForm } from "@/lib/studio/actions";
 
 export default async function StudioPage({
   params,
@@ -33,6 +33,19 @@ export default async function StudioPage({
     }
   }
 
+  async function generate() {
+    "use server";
+    const result = await generateFirstDraft({ carouselId: id });
+    if (!result.ok) {
+      const message =
+        result.error === "UNAUTHENTICATED"
+          ? "Você precisa entrar novamente."
+          : String(result.error ?? "Falha ao gerar.");
+      redirect(`/app/studio/${id}?error=${encodeURIComponent(message)}`);
+    }
+    redirect(`/app/studio/${id}?generated=1`);
+  }
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="space-y-1">
@@ -53,6 +66,25 @@ export default async function StudioPage({
           {error}
         </div>
       ) : null}
+
+      <section className="flex items-center justify-between gap-3 rounded-md border p-4">
+        <div className="text-sm">
+          <div className="font-medium">Geração (IA)</div>
+          <div className="text-slate-600">
+            Status atual: <span className="font-mono">{project.carousel.generation_status}</span>
+            {project.carousel.generation_error ? (
+              <span className="ml-2 text-red-700">
+                ({project.carousel.generation_error})
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <form action={generate}>
+          <button className="rounded-md bg-black px-3 py-2 text-sm text-white" type="submit">
+            Gerar rascunho
+          </button>
+        </form>
+      </section>
 
       <section className="rounded-md border p-4">
         <div className="text-sm font-medium">Resumo</div>

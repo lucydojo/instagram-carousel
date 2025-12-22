@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isCurrentUserSuperAdmin } from "@/lib/app/access";
 import { editorStateSchema } from "@/lib/studio/queries";
 import { createSignedUrl } from "@/lib/studio/storage";
+import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
 
 const idSchema = z.string().uuid();
 
@@ -470,4 +471,10 @@ export async function getSignedUrlForCarouselAsset(input: {
     path: asset.storage_path,
     expiresIn: parsed.data.expiresIn
   });
+}
+
+export async function generateFirstDraft(input: { carouselId: string }) {
+  const parsed = z.object({ carouselId: idSchema }).safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid carouselId." };
+  return await generateFirstDraftForCarousel(parsed.data.carouselId);
 }
