@@ -176,16 +176,25 @@ export async function generateFirstDraftForCarousel(input: {
     ? input.imageModel
     : GEMINI_IMAGE_MODELS.NANO_BANANA;
 
+  const progressMeta: Record<string, unknown> = {
+    started_at: new Date().toISOString(),
+    provider: "gemini",
+    stage: "text",
+    images: {
+      model: imageModel,
+      total: slidesCount,
+      done: 0,
+      failed: 0,
+      bySlide: [] as Array<Record<string, unknown>>
+    }
+  };
+
   await supabase
     .from("carousels")
     .update({
       generation_status: "running",
       generation_error: null,
-      generation_meta: {
-        started_at: new Date().toISOString(),
-        provider: "gemini",
-        images: { model: imageModel }
-      }
+      generation_meta: progressMeta
     })
     .eq("id", carouselId);
 
@@ -214,11 +223,18 @@ export async function generateFirstDraftForCarousel(input: {
       .update({
         generation_status: "failed",
         generation_error: gen.error,
-        generation_meta: { ...prevMeta, raw: gen.raw ?? null }
+        generation_meta: { ...prevMeta, stage: "failed_text", raw: gen.raw ?? null }
       })
       .eq("id", carouselId);
     return { ok: false as const, error: gen.error };
   }
+
+  progressMeta.stage = "images";
+  progressMeta.title = gen.data.title;
+  await supabase
+    .from("carousels")
+    .update({ generation_meta: progressMeta })
+    .eq("id", carouselId);
 
   const editorState = toEditorState(gen.data);
 
@@ -233,7 +249,18 @@ export async function generateFirstDraftForCarousel(input: {
       model: imageModel
     });
 
-    if (!image.ok) continue;
+    const imagesMeta = progressMeta.images as Record<string, unknown>;
+    const bySlide = imagesMeta.bySlide as Array<Record<string, unknown>>;
+
+    if (!image.ok) {
+      imagesMeta.failed = Number(imagesMeta.failed ?? 0) + 1;
+      bySlide.push({ slideIndex: slide.index, status: "failed" });
+      await supabase
+        .from("carousels")
+        .update({ generation_meta: progressMeta })
+        .eq("id", carouselId);
+      continue;
+    }
 
     const ext = image.mimeType.includes("png")
       ? "png"
@@ -251,6 +278,12 @@ export async function generateFirstDraftForCarousel(input: {
     });
 
     if (uploadError) {
+      imagesMeta.failed = Number(imagesMeta.failed ?? 0) + 1;
+      bySlide.push({ slideIndex: slide.index, status: "failed_upload" });
+      await supabase
+        .from("carousels")
+        .update({ generation_meta: progressMeta })
+        .eq("id", carouselId);
       continue;
     }
 
@@ -273,8 +306,24 @@ export async function generateFirstDraftForCarousel(input: {
 
     if (!insertError) {
       generatedAssets.push({ slideIndex: slide.index, path });
+      imagesMeta.done = Number(imagesMeta.done ?? 0) + 1;
+      bySlide.push({ slideIndex: slide.index, status: "ready", path });
+      await supabase
+        .from("carousels")
+        .update({ generation_meta: progressMeta })
+        .eq("id", carouselId);
+    } else {
+      imagesMeta.failed = Number(imagesMeta.failed ?? 0) + 1;
+      bySlide.push({ slideIndex: slide.index, status: "failed_db" });
+      await supabase
+        .from("carousels")
+        .update({ generation_meta: progressMeta })
+        .eq("id", carouselId);
     }
   }
+
+  progressMeta.stage = "done";
+  progressMeta.finished_at = new Date().toISOString();
 
   await supabase
     .from("carousels")
@@ -283,11 +332,7 @@ export async function generateFirstDraftForCarousel(input: {
       editor_state: editorState,
       generation_status: "succeeded",
       generation_error: null,
-      generation_meta: {
-        finished_at: new Date().toISOString(),
-        provider: "gemini",
-        images: { count: generatedAssets.length, model: imageModel }
-      }
+      generation_meta: progressMeta
     })
     .eq("id", carouselId);
 

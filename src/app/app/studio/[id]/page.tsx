@@ -1,6 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { getStudioProject } from "@/lib/studio/queries";
-import { generateFirstDraft, saveCarouselEditorStateFromForm } from "@/lib/studio/actions";
+import {
+  cleanupPlaceholderGeneratedAssets,
+  generateFirstDraft,
+  saveCarouselEditorStateFromForm
+} from "@/lib/studio/actions";
 import { GEMINI_IMAGE_MODELS } from "@/lib/ai/gemini_image";
 
 export default async function StudioPage({
@@ -8,7 +12,7 @@ export default async function StudioPage({
   searchParams
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ saved?: string; error?: string }>;
+  searchParams?: Promise<{ saved?: string; cleaned?: string; error?: string }>;
 }) {
   const { id } = await params;
   const { user, project } = await getStudioProject(id);
@@ -17,6 +21,7 @@ export default async function StudioPage({
 
   const sp = await searchParams;
   const saved = sp?.saved === "1";
+  const cleaned = sp?.cleaned ? Number(sp.cleaned) : null;
   const error = sp?.error ? decodeURIComponent(sp.error) : null;
 
   async function save(formData: FormData) {
@@ -51,6 +56,37 @@ export default async function StudioPage({
     redirect(`/app/studio/${id}?generated=1`);
   }
 
+  async function cleanup() {
+    "use server";
+    const result = await cleanupPlaceholderGeneratedAssets({ carouselId: id });
+    if (!result.ok) {
+      const message =
+        result.error === "UNAUTHENTICATED"
+          ? "Você precisa entrar novamente."
+          : String(result.error ?? "Falha ao limpar.");
+      redirect(`/app/studio/${id}?error=${encodeURIComponent(message)}`);
+    }
+    redirect(`/app/studio/${id}?cleaned=${result.deleted}`);
+  }
+
+  const placeholderCount = project.assets.filter((a) => {
+    const meta = a.metadata as unknown;
+    if (!meta || typeof meta !== "object") return false;
+    return (meta as Record<string, unknown>).provider === "placeholder";
+  }).length;
+
+  const generationMeta = project.carousel.generation_meta as unknown;
+  const imagesMeta =
+    generationMeta && typeof generationMeta === "object"
+      ? ((generationMeta as Record<string, unknown>).images as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+  const imagesDone = typeof imagesMeta?.done === "number" ? imagesMeta.done : null;
+  const imagesTotal = typeof imagesMeta?.total === "number" ? imagesMeta.total : null;
+  const imagesFailed =
+    typeof imagesMeta?.failed === "number" ? imagesMeta.failed : null;
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="space-y-1">
@@ -72,6 +108,12 @@ export default async function StudioPage({
         </div>
       ) : null}
 
+      {cleaned !== null ? (
+        <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+          Limpeza concluída: removidos {cleaned} assets placeholder.
+        </div>
+      ) : null}
+
       <section className="flex flex-col gap-3 rounded-md border p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm">
           <div className="font-medium">Geração (IA)</div>
@@ -80,6 +122,19 @@ export default async function StudioPage({
             {project.carousel.generation_error ? (
               <span className="ml-2 text-red-700">
                 ({project.carousel.generation_error})
+              </span>
+            ) : null}
+            {imagesDone !== null && imagesTotal !== null ? (
+              <span className="ml-2">
+                • Imagens:{" "}
+                <span className="font-mono">
+                  {imagesDone}/{imagesTotal}
+                </span>
+                {imagesFailed !== null && imagesFailed > 0 ? (
+                  <span className="ml-1 text-amber-700">
+                    (falhas: {imagesFailed})
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </div>
@@ -106,6 +161,19 @@ export default async function StudioPage({
           </button>
         </form>
       </section>
+
+      {placeholderCount > 0 ? (
+        <section className="flex items-center justify-between gap-3 rounded-md border p-4">
+          <div className="text-sm text-slate-700">
+            Existem {placeholderCount} imagens antigas (placeholder) no projeto.
+          </div>
+          <form action={cleanup}>
+            <button className="rounded-md border px-3 py-2 text-sm" type="submit">
+              Limpar placeholders
+            </button>
+          </form>
+        </section>
+      ) : null}
 
       <section className="rounded-md border p-4">
         <div className="text-sm font-medium">Resumo</div>

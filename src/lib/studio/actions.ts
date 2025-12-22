@@ -7,6 +7,7 @@ import { editorStateSchema } from "@/lib/studio/queries";
 import { createSignedUrl } from "@/lib/studio/storage";
 import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
 import { isSupportedGeminiImageModel } from "@/lib/ai/gemini_image";
+import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 
 const idSchema = z.string().uuid();
 
@@ -495,4 +496,68 @@ export async function generateFirstDraft(input: {
     carouselId: parsed.data.carouselId,
     imageModel
   });
+}
+
+export async function cleanupPlaceholderGeneratedAssets(input: { carouselId: string }) {
+  const parsed = z.object({ carouselId: idSchema }).safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid carouselId." };
+
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false as const, error: "UNAUTHENTICATED" };
+
+  const { data: carousel } = await supabase
+    .from("carousels")
+    .select("id, owner_id")
+    .eq("id", parsed.data.carouselId)
+    .maybeSingle();
+
+  if (!carousel) return { ok: false as const, error: "NOT_FOUND" };
+  if (carousel.owner_id !== userData.user.id)
+    return { ok: false as const, error: "FORBIDDEN" };
+
+  const { data: assets, error: assetsError } = await supabase
+    .from("carousel_assets")
+    .select("id, storage_bucket, storage_path, metadata, asset_type")
+    .eq("carousel_id", parsed.data.carouselId)
+    .eq("asset_type", "generated");
+
+  if (assetsError) return { ok: false as const, error: assetsError.message };
+
+  const placeholderAssets = (assets ?? []).filter((a) => {
+    const meta = a.metadata as unknown;
+    if (!meta || typeof meta !== "object") return false;
+    const provider = (meta as Record<string, unknown>).provider;
+    return provider === "placeholder";
+  });
+
+  if (placeholderAssets.length === 0) {
+    return { ok: true as const, deleted: 0 };
+  }
+
+  const admin = createSupabaseAdminClientIfAvailable();
+  if (admin) {
+    const byBucket = new Map<string, string[]>();
+    for (const a of placeholderAssets) {
+      const list = byBucket.get(a.storage_bucket) ?? [];
+      list.push(a.storage_path);
+      byBucket.set(a.storage_bucket, list);
+    }
+
+    for (const [bucket, paths] of byBucket.entries()) {
+      // remove supports batches; keep it small anyway
+      for (let i = 0; i < paths.length; i += 100) {
+        await admin.storage.from(bucket).remove(paths.slice(i, i + 100));
+      }
+    }
+  }
+
+  const ids = placeholderAssets.map((a) => a.id);
+  const { error: deleteError } = await supabase
+    .from("carousel_assets")
+    .delete()
+    .in("id", ids);
+
+  if (deleteError) return { ok: false as const, error: deleteError.message };
+  return { ok: true as const, deleted: ids.length };
 }
