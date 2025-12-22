@@ -192,6 +192,84 @@ export type Database = {
         };
         Relationships: [];
       };
+      tones: {
+        Row: {
+          id: string;
+          owner_id: string | null;
+          name: string;
+          is_global: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          owner_id?: string | null;
+          name: string;
+          is_global?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          owner_id?: string | null;
+          name?: string;
+          is_global?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      audiences: {
+        Row: {
+          id: string;
+          owner_id: string | null;
+          name: string;
+          is_global: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          owner_id?: string | null;
+          name: string;
+          is_global?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          owner_id?: string | null;
+          name?: string;
+          is_global?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      palettes: {
+        Row: {
+          id: string;
+          owner_id: string | null;
+          name: string;
+          palette_data: Record<string, unknown>;
+          is_global: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          owner_id?: string | null;
+          name: string;
+          palette_data?: Record<string, unknown>;
+          is_global?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          owner_id?: string | null;
+          name?: string;
+          palette_data?: Record<string, unknown>;
+          is_global?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       creator_profiles: {
         Row: {
           id: string;
