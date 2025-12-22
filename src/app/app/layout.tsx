@@ -3,6 +3,9 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isEmailAllowlisted, isCurrentUserSuperAdmin } from "@/lib/app/access";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 async function signOut() {
   "use server";
@@ -12,6 +15,7 @@ async function signOut() {
 }
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
+  const locale = await getLocale();
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase.auth.getUser();
 
@@ -26,14 +30,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   if (!isSuperAdmin && !allowlisted) {
     return (
       <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-4 p-6">
-        <h1 className="text-2xl font-semibold">Access not granted</h1>
-        <p className="text-sm text-slate-600">
-          Your email is not allowlisted for this demo. Ask a super admin to
-          invite you.
-        </p>
+        <h1 className="text-2xl font-semibold">{t(locale, "access.deniedTitle")}</h1>
+        <p className="text-sm text-slate-600">{t(locale, "access.deniedBody")}</p>
         <form action={signOut}>
           <button className="rounded-md border px-3 py-2" type="submit">
-            Sign out
+            {t(locale, "common.signOut")}
           </button>
         </form>
       </main>
@@ -81,18 +82,19 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                 className="text-sm text-slate-600 underline"
                 href="/app/admin"
               >
-                Admin
+                {t(locale, "common.admin")}
               </Link>
             ) : null}
           </div>
           <div className="flex items-center gap-3">
+            <LocaleSwitcher redirectTo="/app" />
             <span className="text-sm text-slate-600">{email}</span>
             <form action={signOut}>
               <button
                 className="rounded-md border px-3 py-2 text-sm"
                 type="submit"
               >
-                Sign out
+                {t(locale, "common.signOut")}
               </button>
             </form>
           </div>

@@ -4,6 +4,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isCurrentUserSuperAdmin } from "@/lib/app/access";
 import { getEnv } from "@/lib/env";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 const emailSchema = z.string().email();
 
@@ -76,6 +78,7 @@ export default async function AllowlistPage({
 }: {
   searchParams?: Promise<{ error?: string; invited?: string }>;
 }) {
+  const locale = await getLocale();
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase.auth.getUser();
   if (!data.user) redirect("/sign-in");
@@ -95,15 +98,17 @@ export default async function AllowlistPage({
   return (
     <div className="mx-auto max-w-xl space-y-6">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">Allowlist</h1>
+        <h1 className="text-xl font-semibold">
+          {t(locale, "admin.allowlist.title")}
+        </h1>
         <p className="text-sm text-slate-600">
-          Invite-only: add emails and optionally send Supabase invites.
+          {t(locale, "admin.allowlist.subtitle")}
         </p>
       </div>
 
       {invited ? (
         <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-          Invite sent.
+          {t(locale, "admin.allowlist.inviteSent")}
         </div>
       ) : null}
 
@@ -119,11 +124,11 @@ export default async function AllowlistPage({
             className="flex-1 rounded-md border px-3 py-2"
             name="email"
             type="email"
-            placeholder="user@company.com"
+            placeholder={t(locale, "admin.allowlist.emailPlaceholder")}
             required
           />
           <button className="rounded-md border px-3 py-2" type="submit">
-            Allowlist
+            {t(locale, "admin.allowlist.allowlistAction")}
           </button>
         </form>
 
@@ -132,14 +137,14 @@ export default async function AllowlistPage({
             className="flex-1 rounded-md border px-3 py-2"
             name="email"
             type="email"
-            placeholder="user@company.com"
+            placeholder={t(locale, "admin.allowlist.emailPlaceholder")}
             required
           />
           <button
             className="rounded-md bg-black px-3 py-2 text-white"
             type="submit"
           >
-            Allowlist + invite
+            {t(locale, "admin.allowlist.inviteAction")}
           </button>
         </form>
 

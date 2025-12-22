@@ -2,6 +2,9 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getInstanceSettings } from "@/lib/app/instance";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 type SupabaseErrorLike = {
   code?: string | null;
@@ -275,6 +278,7 @@ export default async function SetupPage({
 }: {
   searchParams?: Promise<{ error?: string }>;
 }) {
+  const locale = await getLocale();
   let instance: Awaited<ReturnType<typeof getInstanceSettings>> | null = null;
   let instanceLoadError: string | null = null;
   const hasAdminKey = !!createSupabaseAdminClientIfAvailable();
@@ -296,18 +300,22 @@ export default async function SetupPage({
   const combinedError = error ?? instanceLoadError;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 p-6">
+    <main className="relative mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 p-6">
+      <div className="absolute right-6 top-6">
+        <LocaleSwitcher redirectTo="/setup" />
+      </div>
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold">First run setup</h1>
+        <h1 className="text-2xl font-semibold">{t(locale, "setup.title")}</h1>
         <p className="text-sm text-slate-600">
-          Create the first super admin and the initial workspace.
+          {t(locale, "setup.subtitle")}
         </p>
       </div>
 
       {!hasAdminKey ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Tip: set <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code>{" "}
-          for one-click setup (avoids “email not confirmed” / RLS issues).
+          {t(locale, "setup.tipServiceRole").split("SUPABASE_SERVICE_ROLE_KEY")[0]}
+          <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code>
+          {t(locale, "setup.tipServiceRole").split("SUPABASE_SERVICE_ROLE_KEY")[1] ?? ""}
         </div>
       ) : null}
 
@@ -319,7 +327,9 @@ export default async function SetupPage({
 
       <form action={bootstrap} className="space-y-4">
         <label className="block space-y-2">
-          <span className="text-sm font-medium">Super admin email</span>
+          <span className="text-sm font-medium">
+            {t(locale, "setup.superAdminEmail")}
+          </span>
           <input
             className="w-full rounded-md border px-3 py-2"
             type="email"
@@ -330,7 +340,7 @@ export default async function SetupPage({
         </label>
 
         <label className="block space-y-2">
-          <span className="text-sm font-medium">Password</span>
+          <span className="text-sm font-medium">{t(locale, "setup.password")}</span>
           <input
             className="w-full rounded-md border px-3 py-2"
             type="password"
@@ -342,7 +352,9 @@ export default async function SetupPage({
         </label>
 
         <label className="block space-y-2">
-          <span className="text-sm font-medium">Workspace name</span>
+          <span className="text-sm font-medium">
+            {t(locale, "setup.workspaceName")}
+          </span>
           <input
             className="w-full rounded-md border px-3 py-2"
             name="workspaceName"
@@ -351,7 +363,9 @@ export default async function SetupPage({
         </label>
 
         <label className="block space-y-2">
-          <span className="text-sm font-medium">Workspace logo (optional)</span>
+          <span className="text-sm font-medium">
+            {t(locale, "setup.workspaceLogo")}
+          </span>
           <input
             className="w-full"
             type="file"
@@ -366,7 +380,7 @@ export default async function SetupPage({
           type="submit"
           disabled={!instance}
         >
-          Create admin + workspace
+          {t(locale, "setup.cta")}
         </button>
       </form>
     </main>

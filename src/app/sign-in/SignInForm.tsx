@@ -15,7 +15,15 @@ export interface Testimonial {
 interface SignInPageProps {
     action: (formData: FormData) => Promise<void>;
     error?: string | null;
-    canSetup?: boolean;
+    copy: {
+        title: string;
+        subtitle: string;
+        emailLabel: string;
+        emailPlaceholder: string;
+        passwordLabel: string;
+        passwordPlaceholder: string;
+        cta: string;
+    };
 }
 
 const DEMO_TESTIMONIALS: Testimonial[] = [
@@ -70,7 +78,7 @@ const TestimonialCard = ({
 export const SignInForm: React.FC<SignInPageProps> = ({
     action,
     error,
-    canSetup,
+    copy,
 }) => {
     const [showPassword, setShowPassword] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
@@ -91,11 +99,11 @@ export const SignInForm: React.FC<SignInPageProps> = ({
                     <div className="flex flex-col gap-6">
                         <h1 className="animate-element animate-delay-100 text-4xl font-semibold leading-tight md:text-5xl">
                             <span className="tracking-tighter text-foreground font-light">
-                                Welcome back
+                                {copy.title}
                             </span>
                         </h1>
                         <p className="animate-element animate-delay-200 text-muted-foreground">
-                            Enter your credentials to access your workspace.
+                            {copy.subtitle}
                         </p>
 
                         {error && (
@@ -111,13 +119,13 @@ export const SignInForm: React.FC<SignInPageProps> = ({
                         >
                             <div className="animate-element animate-delay-300">
                                 <label className="text-sm font-medium text-muted-foreground">
-                                    Email Address
+                                    {copy.emailLabel}
                                 </label>
                                 <GlassInputWrapper>
                                     <input
                                         name="email"
                                         type="email"
-                                        placeholder="Enter your email address"
+                                        placeholder={copy.emailPlaceholder}
                                         required
                                         className="w-full rounded-2xl bg-transparent p-4 text-sm focus:outline-none"
                                     />
@@ -126,14 +134,14 @@ export const SignInForm: React.FC<SignInPageProps> = ({
 
                             <div className="animate-element animate-delay-400">
                                 <label className="text-sm font-medium text-muted-foreground">
-                                    Password
+                                    {copy.passwordLabel}
                                 </label>
                                 <GlassInputWrapper>
                                     <div className="relative">
                                         <input
                                             name="password"
                                             type={showPassword ? "text" : "password"}
-                                            placeholder="Enter your password"
+                                            placeholder={copy.passwordPlaceholder}
                                             required
                                             className="w-full rounded-2xl bg-transparent p-4 pr-12 text-sm focus:outline-none"
                                         />
@@ -160,21 +168,10 @@ export const SignInForm: React.FC<SignInPageProps> = ({
                                 {isLoading ? (
                                     <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                                 ) : (
-                                    "Sign In"
+                                    copy.cta
                                 )}
                             </button>
                         </form>
-                        {canSetup ? (
-                            <p className="animate-element animate-delay-700 text-center text-sm text-muted-foreground">
-                                First time here?{" "}
-                                <a
-                                    href="/setup"
-                                    className="text-primary transition-colors hover:underline"
-                                >
-                                    Run setup wizard
-                                </a>
-                            </p>
-                        ) : null}
                     </div>
                 </div>
             </section>

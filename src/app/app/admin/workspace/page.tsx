@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isCurrentUserSuperAdmin } from "@/lib/app/access";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 async function updateWorkspace(formData: FormData) {
   "use server";
@@ -71,6 +73,7 @@ export default async function WorkspaceAdminPage({
 }: {
   searchParams?: Promise<{ error?: string; saved?: string }>;
 }) {
+  const locale = await getLocale();
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase.auth.getUser();
   if (!data.user) redirect("/sign-in");
@@ -92,15 +95,17 @@ export default async function WorkspaceAdminPage({
   return (
     <div className="mx-auto max-w-xl space-y-6">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">Workspace branding</h1>
+        <h1 className="text-xl font-semibold">
+          {t(locale, "admin.workspace.title")}
+        </h1>
         <p className="text-sm text-slate-600">
-          Minimal white-label controls: name and logo.
+          {t(locale, "admin.workspace.subtitle")}
         </p>
       </div>
 
       {saved ? (
         <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-          Saved.
+          {t(locale, "common.saved")}
         </div>
       ) : null}
 
@@ -111,14 +116,18 @@ export default async function WorkspaceAdminPage({
       ) : null}
 
       {!workspace ? (
-        <div className="text-sm text-slate-600">No workspace found.</div>
+        <div className="text-sm text-slate-600">
+          {t(locale, "admin.workspace.notFound")}
+        </div>
       ) : (
         <form
           action={updateWorkspace}
           className="space-y-4 rounded-md border p-4"
         >
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Name</span>
+            <span className="text-sm font-medium">
+              {t(locale, "admin.workspace.name")}
+            </span>
             <input
               className="w-full rounded-md border px-3 py-2"
               name="name"
@@ -127,7 +136,9 @@ export default async function WorkspaceAdminPage({
           </label>
 
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Logo</span>
+            <span className="text-sm font-medium">
+              {t(locale, "admin.workspace.logo")}
+            </span>
             <input
               className="w-full"
               type="file"
@@ -135,7 +146,8 @@ export default async function WorkspaceAdminPage({
               accept="image/*"
             />
             <div className="text-xs text-slate-600">
-              Current: {workspace.logo_path ?? "none"}
+              {t(locale, "admin.workspace.currentLogo")}{" "}
+              {workspace.logo_path ?? t(locale, "admin.workspace.none")}
             </div>
           </label>
 
@@ -143,7 +155,7 @@ export default async function WorkspaceAdminPage({
             className="w-full rounded-md bg-black px-3 py-2 text-white"
             type="submit"
           >
-            Save
+            {t(locale, "common.save")}
           </button>
         </form>
       )}

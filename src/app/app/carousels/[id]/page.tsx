@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 async function getSignedUrl(bucket: string, path: string) {
   const admin = createSupabaseAdminClientIfAvailable();
@@ -18,6 +20,7 @@ export default async function CarouselDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const locale = await getLocale();
   const { id } = await params;
 
   const supabase = await createSupabaseServerClient();
@@ -45,20 +48,25 @@ export default async function CarouselDetailPage({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">
-            {carousel.title ?? "Untitled"}
+            {carousel.title ?? t(locale, "common.untitled")}
           </h1>
           <div className="text-xs text-slate-600">
-            {isOwner ? "You can edit" : "View-only"} •{" "}
+            {isOwner
+              ? t(locale, "common.youCanEdit")
+              : t(locale, "common.viewOnly")}{" "}
+            •{" "}
             {new Date(carousel.created_at).toLocaleString()}
           </div>
         </div>
         <Link className="text-sm underline" href="/app">
-          Back
+          {t(locale, "common.back")}
         </Link>
       </div>
 
       <section className="space-y-2 rounded-md border p-4">
-        <div className="text-sm font-medium">Draft JSON</div>
+        <div className="text-sm font-medium">
+          {t(locale, "carousel.detailDraftTitle")}
+        </div>
         <pre className="overflow-auto rounded bg-slate-50 p-3 text-xs">
           {JSON.stringify(carousel.draft, null, 2)}
         </pre>
@@ -66,19 +74,23 @@ export default async function CarouselDetailPage({
 
       <section className="space-y-3 rounded-md border p-4">
         <div className="flex items-center justify-between gap-4">
-          <div className="text-sm font-medium">Reference assets</div>
+          <div className="text-sm font-medium">
+            {t(locale, "carousel.assetsTitle")}
+          </div>
           {isOwner ? (
             <Link
               className="text-sm underline"
               href={`/app/carousels/${carousel.id}/upload`}
             >
-              Upload references
+              {t(locale, "carousel.assetsUpload")}
             </Link>
           ) : null}
         </div>
 
         {(assets ?? []).length === 0 ? (
-          <div className="text-sm text-slate-600">No assets yet.</div>
+          <div className="text-sm text-slate-600">
+            {t(locale, "carousel.assetsEmpty")}
+          </div>
         ) : (
           <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {await Promise.all(
@@ -97,7 +109,7 @@ export default async function CarouselDetailPage({
                       <img alt="" className="mt-2 w-full rounded" src={url} />
                     ) : (
                       <div className="mt-2 text-sm text-slate-600">
-                        Unable to sign URL.
+                        {t(locale, "carousel.assetsUnableToSign")}
                       </div>
                     )}
                   </li>

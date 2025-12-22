@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { CarouselDraft } from "@/lib/db/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 const newCarouselSchema = z.object({
   inputMode: z.enum(["topic", "prompt"]),
@@ -135,15 +137,17 @@ export default async function NewCarouselPage({
 }: {
   searchParams?: Promise<{ error?: string }>;
 }) {
+  const locale = await getLocale();
   const params = await searchParams;
   const error = params?.error ? decodeURIComponent(params.error) : null;
+  const defaultDraftLanguage = locale === "pt-BR" ? "Português (Brasil)" : "English";
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">New carousel (draft)</h1>
+        <h1 className="text-xl font-semibold">{t(locale, "newCarousel.title")}</h1>
         <p className="text-sm text-slate-600">
-          No generation yet — this only saves your inputs.
+          {t(locale, "newCarousel.subtitle")}
         </p>
       </div>
 
@@ -156,19 +160,23 @@ export default async function NewCarouselPage({
       <form action={createCarousel} className="space-y-4 rounded-md border p-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Input mode</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.inputMode")}
+            </span>
             <select
               className="w-full rounded-md border px-3 py-2"
               name="inputMode"
               defaultValue="topic"
             >
-              <option value="topic">Topic</option>
-              <option value="prompt">Prompt</option>
+              <option value="topic">{t(locale, "newCarousel.inputModeTopic")}</option>
+              <option value="prompt">{t(locale, "newCarousel.inputModePrompt")}</option>
             </select>
           </label>
 
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Slides</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.slides")}
+            </span>
             <input
               className="w-full rounded-md border px-3 py-2"
               name="slidesCount"
@@ -182,12 +190,12 @@ export default async function NewCarouselPage({
         </div>
 
         <label className="block space-y-2">
-          <span className="text-sm font-medium">Topic</span>
+          <span className="text-sm font-medium">{t(locale, "newCarousel.topic")}</span>
           <input className="w-full rounded-md border px-3 py-2" name="topic" />
         </label>
 
         <label className="block space-y-2">
-          <span className="text-sm font-medium">Prompt</span>
+          <span className="text-sm font-medium">{t(locale, "newCarousel.prompt")}</span>
           <textarea
             className="w-full rounded-md border px-3 py-2"
             name="prompt"
@@ -197,36 +205,44 @@ export default async function NewCarouselPage({
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Tone</span>
+            <span className="text-sm font-medium">{t(locale, "newCarousel.tone")}</span>
             <input className="w-full rounded-md border px-3 py-2" name="tone" />
           </label>
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Audience</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.audience")}
+            </span>
             <input
               className="w-full rounded-md border px-3 py-2"
               name="targetAudience"
             />
           </label>
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Language</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.language")}
+            </span>
             <input
               className="w-full rounded-md border px-3 py-2"
               name="language"
-              defaultValue="English"
+              defaultValue={defaultDraftLanguage}
             />
           </label>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Template (id)</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.templateId")}
+            </span>
             <input
               className="w-full rounded-md border px-3 py-2"
               name="templateId"
             />
           </label>
           <label className="block space-y-2">
-            <span className="text-sm font-medium">Preset (id)</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.presetId")}
+            </span>
             <input
               className="w-full rounded-md border px-3 py-2"
               name="presetId"
@@ -237,25 +253,33 @@ export default async function NewCarouselPage({
         <div className="space-y-3 rounded-md border p-3">
           <label className="flex items-center gap-2">
             <input type="checkbox" name="creatorEnabled" />
-            <span className="text-sm font-medium">Creator info</span>
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.creatorInfo")}
+            </span>
           </label>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <label className="block space-y-2">
-              <span className="text-sm font-medium">Name</span>
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.creatorName")}
+              </span>
               <input
                 className="w-full rounded-md border px-3 py-2"
                 name="creatorName"
               />
             </label>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">Handle</span>
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.creatorHandle")}
+              </span>
               <input
                 className="w-full rounded-md border px-3 py-2"
                 name="creatorHandle"
               />
             </label>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">Role</span>
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.creatorRole")}
+              </span>
               <input
                 className="w-full rounded-md border px-3 py-2"
                 name="creatorRole"
@@ -265,10 +289,12 @@ export default async function NewCarouselPage({
         </div>
 
         <div className="space-y-3 rounded-md border p-3">
-          <div className="text-sm font-medium">Palette</div>
+          <div className="text-sm font-medium">{t(locale, "newCarousel.palette")}</div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <label className="block space-y-2">
-              <span className="text-sm font-medium">Background</span>
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.paletteBackground")}
+              </span>
               <input
                 className="w-full rounded-md border px-3 py-2"
                 name="paletteBackground"
@@ -276,7 +302,9 @@ export default async function NewCarouselPage({
               />
             </label>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">Text</span>
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.paletteText")}
+              </span>
               <input
                 className="w-full rounded-md border px-3 py-2"
                 name="paletteText"
@@ -284,7 +312,9 @@ export default async function NewCarouselPage({
               />
             </label>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">Accent</span>
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.paletteAccent")}
+              </span>
               <input
                 className="w-full rounded-md border px-3 py-2"
                 name="paletteAccent"
@@ -298,7 +328,7 @@ export default async function NewCarouselPage({
           className="w-full rounded-md bg-black px-3 py-2 text-white"
           type="submit"
         >
-          Create draft
+          {t(locale, "newCarousel.create")}
         </button>
       </form>
     </div>

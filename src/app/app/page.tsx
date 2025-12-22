@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 export default async function AppHomePage() {
+  const locale = await getLocale();
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
 
@@ -17,11 +20,8 @@ export default async function AppHomePage() {
   if (!membership?.workspace_id) {
     return (
       <div className="space-y-2">
-        <h1 className="text-xl font-semibold">Welcome</h1>
-        <p className="text-sm text-slate-600">
-          You’re allowlisted, but not yet in a workspace. Ask a super admin to
-          invite you, or try again.
-        </p>
+        <h1 className="text-xl font-semibold">{t(locale, "app.welcomeTitle")}</h1>
+        <p className="text-sm text-slate-600">{t(locale, "app.noWorkspace")}</p>
       </div>
     );
   }
@@ -35,12 +35,12 @@ export default async function AppHomePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Carousels</h1>
+        <h1 className="text-xl font-semibold">{t(locale, "carousels.title")}</h1>
         <Link
           className="rounded-md bg-black px-3 py-2 text-sm text-white"
           href="/app/new"
         >
-          New carousel
+          {t(locale, "carousels.new")}
         </Link>
       </div>
 
@@ -50,10 +50,13 @@ export default async function AppHomePage() {
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="font-medium">
-                  {carousel.title ?? "Untitled"}
+                  {carousel.title ?? t(locale, "common.untitled")}
                 </div>
                 <div className="text-xs text-slate-600">
-                  {carousel.owner_id === user.id ? "You" : "Workspace member"} •{" "}
+                  {carousel.owner_id === user.id
+                    ? t(locale, "common.you")
+                    : t(locale, "common.workspaceMember")}{" "}
+                  •{" "}
                   {new Date(carousel.created_at).toLocaleString()}
                 </div>
               </div>
@@ -61,7 +64,7 @@ export default async function AppHomePage() {
                 className="text-sm underline"
                 href={`/app/carousels/${carousel.id}`}
               >
-                Open
+                {t(locale, "common.open")}
               </Link>
             </div>
           </li>

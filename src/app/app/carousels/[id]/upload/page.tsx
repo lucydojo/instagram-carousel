@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { getLocale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
 
 async function uploadReference(params: { id: string }, formData: FormData) {
   "use server";
@@ -72,13 +74,16 @@ export default async function UploadReferencesPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const locale = await getLocale();
   const resolved = await params;
   return (
     <div className="mx-auto max-w-xl space-y-4">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">Upload reference images</h1>
+        <h1 className="text-xl font-semibold">
+          {t(locale, "uploadReferences.title")}
+        </h1>
         <p className="text-sm text-slate-600">
-          Private storage; we’ll use signed URLs for preview.
+          {t(locale, "uploadReferences.subtitle")}
         </p>
       </div>
 
@@ -98,7 +103,7 @@ export default async function UploadReferencesPage({
           className="w-full rounded-md bg-black px-3 py-2 text-white"
           type="submit"
         >
-          Upload
+          {t(locale, "common.upload")}
         </button>
       </form>
     </div>
