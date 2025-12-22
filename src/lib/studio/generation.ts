@@ -4,7 +4,12 @@ import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { CarouselEditorState } from "@/lib/db/types";
 import { geminiGenerateJson } from "@/lib/ai/gemini";
-import { geminiNanoBananaGenerateImage } from "@/lib/ai/gemini_image";
+import {
+  geminiNanoBananaGenerateImage,
+  type GeminiImageModel,
+  GEMINI_IMAGE_MODELS,
+  isSupportedGeminiImageModel
+} from "@/lib/ai/gemini_image";
 import {
   generationResultSchema,
   type GenerationResult
@@ -137,7 +142,11 @@ async function uploadBytesToStorage(input: {
   return { error };
 }
 
-export async function generateFirstDraftForCarousel(carouselId: string) {
+export async function generateFirstDraftForCarousel(input: {
+  carouselId: string;
+  imageModel?: GeminiImageModel;
+}) {
+  const carouselId = input.carouselId;
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false as const, error: "UNAUTHENTICATED" };
@@ -163,12 +172,20 @@ export async function generateFirstDraftForCarousel(carouselId: string) {
     return { ok: false as const, error: "Sem tema/prompt para gerar." };
   }
 
+  const imageModel = isSupportedGeminiImageModel(input.imageModel)
+    ? input.imageModel
+    : GEMINI_IMAGE_MODELS.NANO_BANANA;
+
   await supabase
     .from("carousels")
     .update({
       generation_status: "running",
       generation_error: null,
-      generation_meta: { started_at: new Date().toISOString(), provider: "gemini" }
+      generation_meta: {
+        started_at: new Date().toISOString(),
+        provider: "gemini",
+        images: { model: imageModel }
+      }
     })
     .eq("id", carouselId);
 
@@ -212,7 +229,8 @@ export async function generateFirstDraftForCarousel(carouselId: string) {
     const image = await geminiNanoBananaGenerateImage({
       prompt:
         (prompt || `Imagem para o slide ${slide.index} do carrossel: ${gen.data.title}`) +
-        "\n\nRequisitos: 1080x1080, sem texto na imagem."
+        "\n\nRequisitos: 1080x1080, sem texto na imagem.",
+      model: imageModel
     });
 
     if (!image.ok) continue;
@@ -268,7 +286,7 @@ export async function generateFirstDraftForCarousel(carouselId: string) {
       generation_meta: {
         finished_at: new Date().toISOString(),
         provider: "gemini",
-        images: { count: generatedAssets.length }
+        images: { count: generatedAssets.length, model: imageModel }
       }
     })
     .eq("id", carouselId);

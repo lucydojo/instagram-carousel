@@ -244,3 +244,14 @@ export async function geminiNanoBananaGenerateImage(input: {
   return { ok: false, error: "Não foi possível gerar imagem via Gemini." };
 }
 
+export const GEMINI_IMAGE_MODELS = {
+  NANO_BANANA: "gemini-2.5-flash-image",
+  NANO_BANANA_PRO: "gemini-3-pro-image-preview"
+} as const;
+
+export type GeminiImageModel =
+  (typeof GEMINI_IMAGE_MODELS)[keyof typeof GEMINI_IMAGE_MODELS];
+
+export function isSupportedGeminiImageModel(value: unknown): value is GeminiImageModel {
+  return value === GEMINI_IMAGE_MODELS.NANO_BANANA || value === GEMINI_IMAGE_MODELS.NANO_BANANA_PRO;
+}

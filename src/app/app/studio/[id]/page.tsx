@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { getStudioProject } from "@/lib/studio/queries";
 import { generateFirstDraft, saveCarouselEditorStateFromForm } from "@/lib/studio/actions";
+import { GEMINI_IMAGE_MODELS } from "@/lib/ai/gemini_image";
 
 export default async function StudioPage({
   params,
@@ -33,9 +34,13 @@ export default async function StudioPage({
     }
   }
 
-  async function generate() {
+  async function generate(formData: FormData) {
     "use server";
-    const result = await generateFirstDraft({ carouselId: id });
+    const imageModel = formData.get("imageModel")
+      ? String(formData.get("imageModel"))
+      : undefined;
+
+    const result = await generateFirstDraft({ carouselId: id, imageModel });
     if (!result.ok) {
       const message =
         result.error === "UNAUTHENTICATED"
@@ -67,7 +72,7 @@ export default async function StudioPage({
         </div>
       ) : null}
 
-      <section className="flex items-center justify-between gap-3 rounded-md border p-4">
+      <section className="flex flex-col gap-3 rounded-md border p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm">
           <div className="font-medium">Geração (IA)</div>
           <div className="text-slate-600">
@@ -79,7 +84,23 @@ export default async function StudioPage({
             ) : null}
           </div>
         </div>
-        <form action={generate}>
+        <form action={generate} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <label className="text-xs text-slate-600" htmlFor="imageModel">
+            Modelo de imagem
+          </label>
+          <select
+            id="imageModel"
+            name="imageModel"
+            defaultValue={GEMINI_IMAGE_MODELS.NANO_BANANA}
+            className="rounded-md border bg-transparent px-2 py-1 text-sm"
+          >
+            <option value={GEMINI_IMAGE_MODELS.NANO_BANANA}>
+              Nano Banana (Flash)
+            </option>
+            <option value={GEMINI_IMAGE_MODELS.NANO_BANANA_PRO}>
+              Nano Banana Pro (Preview)
+            </option>
+          </select>
           <button className="rounded-md bg-black px-3 py-2 text-sm text-white" type="submit">
             Gerar rascunho
           </button>

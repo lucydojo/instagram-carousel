@@ -6,6 +6,7 @@ import { isCurrentUserSuperAdmin } from "@/lib/app/access";
 import { editorStateSchema } from "@/lib/studio/queries";
 import { createSignedUrl } from "@/lib/studio/storage";
 import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
+import { isSupportedGeminiImageModel } from "@/lib/ai/gemini_image";
 
 const idSchema = z.string().uuid();
 
@@ -473,8 +474,25 @@ export async function getSignedUrlForCarouselAsset(input: {
   });
 }
 
-export async function generateFirstDraft(input: { carouselId: string }) {
-  const parsed = z.object({ carouselId: idSchema }).safeParse(input);
+export async function generateFirstDraft(input: {
+  carouselId: string;
+  imageModel?: string;
+}) {
+  const parsed = z
+    .object({
+      carouselId: idSchema,
+      imageModel: z.string().optional()
+    })
+    .safeParse(input);
   if (!parsed.success) return { ok: false as const, error: "Invalid carouselId." };
-  return await generateFirstDraftForCarousel(parsed.data.carouselId);
+
+  const imageModel =
+    parsed.data.imageModel && isSupportedGeminiImageModel(parsed.data.imageModel)
+      ? parsed.data.imageModel
+      : undefined;
+
+  return await generateFirstDraftForCarousel({
+    carouselId: parsed.data.carouselId,
+    imageModel
+  });
 }
