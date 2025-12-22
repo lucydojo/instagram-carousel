@@ -7,9 +7,6 @@ const imageResponseSchema = z.object({
   mime_type: z.string().min(3).optional()
 });
 
-const TRANSPARENT_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X3WZ8AAAAASUVORK5CYII=";
-
 export async function nanoBananaProGenerateImage(input: {
   prompt: string;
   width: number;
@@ -18,17 +15,15 @@ export async function nanoBananaProGenerateImage(input: {
   ok: true;
   bytes: Uint8Array;
   mimeType: string;
-  provider: "nano_banana_pro" | "placeholder";
+  provider: "nano_banana_pro";
 } | { ok: false; error: string }> {
   const apiUrl = process.env.NANO_BANANA_PRO_API_URL;
   const apiKey = process.env.NANO_BANANA_PRO_API_KEY;
 
   if (!apiUrl || !apiKey) {
     return {
-      ok: true,
-      bytes: Uint8Array.from(Buffer.from(TRANSPARENT_PNG_BASE64, "base64")),
-      mimeType: "image/png",
-      provider: "placeholder"
+      ok: false,
+      error: "NANO_BANANA_PRO_API_URL/NANO_BANANA_PRO_API_KEY não configuradas."
     };
   }
 
@@ -63,4 +58,3 @@ export async function nanoBananaProGenerateImage(input: {
     provider: "nano_banana_pro"
   };
 }
-
