@@ -8,6 +8,9 @@ import { createSignedUrl } from "@/lib/studio/storage";
 import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
 import { isSupportedGeminiImageModel } from "@/lib/ai/gemini_image";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { editPatchSchema } from "@/lib/studio/edit_contract";
+import { applyEditPatch } from "@/lib/studio/apply_edit_patch";
+import { geminiGenerateJson } from "@/lib/ai/gemini";
 
 const idSchema = z.string().uuid();
 
@@ -560,4 +563,230 @@ export async function cleanupPlaceholderGeneratedAssets(input: { carouselId: str
 
   if (deleteError) return { ok: false as const, error: deleteError.message };
   return { ok: true as const, deleted: ids.length };
+}
+
+export async function saveCarouselElementLocksFromForm(formData: FormData) {
+  const parsed = z
+    .object({
+      carouselId: idSchema,
+      elementLocksJson: z.string().min(2)
+    })
+    .safeParse({
+      carouselId: formData.get("carouselId"),
+      elementLocksJson: formData.get("elementLocksJson")
+    });
+
+  if (!parsed.success) {
+    return { ok: false as const, error: "Formulário inválido." };
+  }
+
+  const parsedJson = parseJsonSafe(parsed.data.elementLocksJson);
+  if (!parsedJson.ok) {
+    return { ok: false as const, error: parsedJson.error };
+  }
+
+  if (!parsedJson.value || typeof parsedJson.value !== "object") {
+    return { ok: false as const, error: "element_locks precisa ser um objeto JSON." };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user)
+    return { ok: false as const, error: "Você precisa entrar novamente." };
+
+  const { data: updated, error } = await supabase
+    .from("carousels")
+    .update({ element_locks: parsedJson.value as Record<string, unknown> })
+    .eq("id", parsed.data.carouselId)
+    .select("updated_at")
+    .single();
+
+  if (error || !updated) {
+    return { ok: false as const, error: error?.message ?? "Não foi possível salvar." };
+  }
+
+  return { ok: true as const, updatedAt: updated.updated_at };
+}
+
+const nlEditInputSchema = z.object({
+  carouselId: idSchema,
+  instruction: z.string().trim().min(2).max(2000),
+  slideIndex: z.coerce.number().int().min(1).max(20).optional()
+});
+
+function toEditableSummary(editorState: unknown) {
+  if (!editorState || typeof editorState !== "object") return [];
+  const slides = (editorState as Record<string, unknown>).slides;
+  if (!Array.isArray(slides)) return [];
+  return slides.map((s, idx) => {
+    const slide = s as Record<string, unknown>;
+    const objects = Array.isArray(slide.objects)
+      ? (slide.objects as unknown[])
+      : [];
+    return {
+      slideIndex: idx + 1,
+      slideId: typeof slide.id === "string" ? slide.id : null,
+      objects: objects
+        .filter((o) => o && typeof o === "object")
+        .map((o) => {
+          const obj = o as Record<string, unknown>;
+          return {
+            id: obj.id ?? null,
+            type: obj.type ?? null,
+            text: obj.text ?? null,
+            x: obj.x ?? null,
+            y: obj.y ?? null
+          };
+        })
+    };
+  });
+}
+
+function listLockedElements(elementLocks: unknown) {
+  const locks: Array<{ slideKey: string; objectId: string }> = [];
+
+  if (!elementLocks || typeof elementLocks !== "object") return locks;
+  if (Array.isArray(elementLocks)) {
+    for (const v of elementLocks) {
+      if (typeof v !== "string") continue;
+      const [slideKey, objectId] = v.split(":");
+      if (slideKey && objectId) locks.push({ slideKey, objectId });
+    }
+    return locks;
+  }
+
+  const root = elementLocks as Record<string, unknown>;
+  for (const [slideKey, value] of Object.entries(root)) {
+    if (!value || typeof value !== "object") continue;
+    for (const [objectId, locked] of Object.entries(value as Record<string, unknown>)) {
+      if (locked) locks.push({ slideKey, objectId });
+    }
+  }
+
+  return locks;
+}
+
+export async function applyNaturalLanguageEdit(input: {
+  carouselId: string;
+  instruction: string;
+  slideIndex?: number;
+}) {
+  const parsed = nlEditInputSchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Entrada inválida." };
+
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false as const, error: "UNAUTHENTICATED" };
+
+  const { data: carousel } = await supabase
+    .from("carousels")
+    .select("id, owner_id, editor_state, element_locks, generation_meta")
+    .eq("id", parsed.data.carouselId)
+    .maybeSingle();
+
+  if (!carousel) return { ok: false as const, error: "NOT_FOUND" };
+  if (carousel.owner_id !== userData.user.id)
+    return { ok: false as const, error: "FORBIDDEN" };
+
+  const editorState = carousel.editor_state as unknown;
+  const summary = toEditableSummary(editorState);
+  const locked = listLockedElements(carousel.element_locks as unknown);
+
+  const system = [
+    "Você é um assistente de edição de um editor de carrosséis.",
+    "Sua tarefa é gerar um PATCH JSON para alterar o editor_state.",
+    "NÃO inclua Markdown. Responda SOMENTE com JSON válido.",
+    "Regras:",
+    "- Use apenas operações: set_text, set_style, move",
+    "- Sempre inclua slideIndex (1..N) e objectId",
+    "- NÃO modifique elementos travados (lockedElements)."
+  ].join("\n");
+
+  const user = [
+    "Contexto (slides e elementos):",
+    JSON.stringify(summary, null, 2),
+    "",
+    "lockedElements:",
+    JSON.stringify(locked, null, 2),
+    "",
+    parsed.data.slideIndex ? `slideIndex alvo: ${parsed.data.slideIndex}` : "",
+    `Instrução do usuário: ${parsed.data.instruction}`,
+    "",
+    "Formato esperado:",
+    JSON.stringify(
+      {
+        ops: [
+          { op: "set_text", slideIndex: 1, objectId: "title", text: "..." },
+          { op: "set_style", slideIndex: 1, objectId: "title", style: { fontWeight: 700 } },
+          { op: "move", slideIndex: 1, objectId: "title", x: 100, y: 200 }
+        ],
+        summary: "..."
+      },
+      null,
+      2
+    )
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const patchRes = await geminiGenerateJson({
+    system,
+    user,
+    schema: editPatchSchema
+  });
+
+  if (!patchRes.ok) {
+    return { ok: false as const, error: patchRes.error };
+  }
+
+  const currentState = editorStateSchema.safeParse(editorState);
+  if (!currentState.success) {
+    return {
+      ok: false as const,
+      error: "editor_state atual inválido; não foi possível aplicar edição."
+    };
+  }
+
+  const applied = applyEditPatch({
+    editorState: currentState.data,
+    locks: carousel.element_locks as unknown,
+    patch: patchRes.data
+  });
+
+  const prevMeta =
+    carousel.generation_meta && typeof carousel.generation_meta === "object"
+      ? (carousel.generation_meta as Record<string, unknown>)
+      : {};
+
+  const history = Array.isArray(prevMeta.edits) ? (prevMeta.edits as unknown[]) : [];
+  const nextHistory = [
+    {
+      at: new Date().toISOString(),
+      instruction: parsed.data.instruction,
+      slideIndex: parsed.data.slideIndex ?? null,
+      patch: patchRes.data,
+      applied: applied.applied,
+      skippedLocked: applied.skippedLocked,
+      skippedMissing: applied.skippedMissing,
+      model: process.env.GEMINI_MODEL ?? "gemini"
+    },
+    ...history
+  ].slice(0, 20);
+
+  const nextMeta = { ...prevMeta, edits: nextHistory };
+
+  const { error: updateError } = await supabase
+    .from("carousels")
+    .update({ editor_state: applied.nextState, generation_meta: nextMeta })
+    .eq("id", parsed.data.carouselId);
+
+  if (updateError) return { ok: false as const, error: updateError.message };
+
+  return {
+    ok: true as const,
+    applied: applied.applied,
+    skippedLocked: applied.skippedLocked,
+    skippedMissing: applied.skippedMissing,
+    summary: patchRes.data.summary ?? null
+  };
 }
