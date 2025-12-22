@@ -1,4 +1,8 @@
-import type { CarouselDraft } from "@/lib/db/types";
+import type {
+  CarouselDraft,
+  CarouselEditorState,
+  CarouselGenerationStatus
+} from "@/lib/db/types";
 
 export type Database = {
   public: {
@@ -98,6 +102,10 @@ export type Database = {
           title: string | null;
           draft: CarouselDraft;
           element_locks: Record<string, unknown>;
+          editor_state: CarouselEditorState;
+          generation_status: CarouselGenerationStatus;
+          generation_meta: Record<string, unknown>;
+          generation_error: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -108,11 +116,19 @@ export type Database = {
           title?: string | null;
           draft: CarouselDraft;
           element_locks?: Record<string, unknown>;
+          editor_state?: CarouselEditorState;
+          generation_status?: CarouselGenerationStatus;
+          generation_meta?: Record<string, unknown>;
+          generation_error?: string | null;
         };
         Update: {
           title?: string | null;
           draft?: CarouselDraft;
           element_locks?: Record<string, unknown>;
+          editor_state?: CarouselEditorState;
+          generation_status?: CarouselGenerationStatus;
+          generation_meta?: Record<string, unknown>;
+          generation_error?: string | null;
         };
         Relationships: [];
       };
@@ -126,6 +142,8 @@ export type Database = {
           storage_bucket: string;
           storage_path: string;
           mime_type: string | null;
+          status: string;
+          metadata: Record<string, unknown>;
           created_at: string;
         };
         Insert: {
@@ -137,8 +155,41 @@ export type Database = {
           storage_bucket: string;
           storage_path: string;
           mime_type?: string | null;
+          status?: string;
+          metadata?: Record<string, unknown>;
         };
         Update: never;
+        Relationships: [];
+      };
+      carousel_templates: {
+        Row: {
+          id: string;
+          workspace_id: string | null;
+          owner_id: string | null;
+          name: string;
+          template_data: Record<string, unknown>;
+          is_global: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id?: string | null;
+          owner_id?: string | null;
+          name: string;
+          template_data?: Record<string, unknown>;
+          is_global?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          workspace_id?: string | null;
+          owner_id?: string | null;
+          name?: string;
+          template_data?: Record<string, unknown>;
+          is_global?: boolean;
+          updated_at?: string;
+        };
         Relationships: [];
       };
       creator_profiles: {

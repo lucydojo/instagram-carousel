@@ -26,3 +26,20 @@ export type CarouselDraft = {
     additional?: string[];
   };
 };
+
+export type CarouselGenerationStatus =
+  | "idle"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+/**
+ * Canonical persistence format for the studio/editor.
+ * Intentionally tolerant: Fabric.js serialization and our higher-level model can evolve.
+ */
+export type CarouselEditorState = {
+  version: number;
+  global?: Record<string, unknown>;
+  slides?: Array<Record<string, unknown>>;
+};
