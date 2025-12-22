@@ -38,17 +38,23 @@ function normalizeModelId(model: string): string {
 }
 
 async function listModels(apiKey: string) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
-    { method: "GET" }
-  );
-  const json = (await res.json().catch(() => null)) as unknown;
-  const parsed = geminiModelsSchema.safeParse(json);
-  if (!res.ok || !parsed.success) return [];
-  return (parsed.data.models ?? []).map((m) => ({
-    name: normalizeModelId(m.name),
-    supportedGenerationMethods: m.supportedGenerationMethods ?? []
-  }));
+  const versions = ["v1beta", "v1"] as const;
+
+  for (const version of versions) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/${version}/models?key=${encodeURIComponent(apiKey)}`,
+      { method: "GET" }
+    );
+    const json = (await res.json().catch(() => null)) as unknown;
+    const parsed = geminiModelsSchema.safeParse(json);
+    if (!res.ok || !parsed.success) continue;
+    return (parsed.data.models ?? []).map((m) => ({
+      name: normalizeModelId(m.name),
+      supportedGenerationMethods: m.supportedGenerationMethods ?? []
+    }));
+  }
+
+  return [];
 }
 
 function isModelError(body: unknown): boolean {
@@ -105,9 +111,11 @@ async function callGenerateContent(input: {
   model: string;
   system: string;
   user: string;
+  version?: "v1beta" | "v1";
 }) {
   const model = normalizeModelId(input.model);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+  const version = input.version ?? "v1beta";
+  const url = `https://generativelanguage.googleapis.com/${version}/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(input.apiKey)}`;
 
@@ -140,6 +148,31 @@ async function callGenerateContent(input: {
   });
 }
 
+async function callGenerateContentAnyVersion(input: {
+  apiKey: string;
+  model: string;
+  system: string;
+  user: string;
+}): Promise<{ res: Response; json: unknown }> {
+  const versions: Array<"v1beta" | "v1"> = ["v1beta", "v1"];
+  for (const version of versions) {
+    const res = await callGenerateContent({ ...input, version });
+    const json = (await res.json().catch(() => null)) as unknown;
+    if (res.ok) return { res, json };
+    if (!isModelError(json) && version === "v1beta") {
+      // Not a model/version issue; don't retry on v1.
+      return { res, json };
+    }
+    // If model/version issue, retry with other version.
+    if (version === "v1") return { res, json };
+  }
+
+  // Unreachable, but keeps TS happy.
+  const res = await callGenerateContent({ ...input, version: "v1beta" });
+  const json = (await res.json().catch(() => null)) as unknown;
+  return { res, json };
+}
+
 export async function geminiGenerateJson<T>(input: {
   system: string;
   user: string;
@@ -155,26 +188,26 @@ export async function geminiGenerateJson<T>(input: {
     input.model ?? process.env.GEMINI_MODEL ?? "gemini-3.0-flash"
   );
 
-  let res = await callGenerateContent({
+  let { res, json } = await callGenerateContentAnyVersion({
     apiKey,
     model: preferredModel,
     system: input.system,
     user: input.user
   });
 
-  let json = (await res.json().catch(() => null)) as unknown;
   let rawText = getTextFromGeminiResponse(json);
 
   if (!res.ok && isModelError(json)) {
     const fallback = await pickFallbackModel(apiKey);
     if (fallback && fallback !== preferredModel) {
-      res = await callGenerateContent({
+      const second = await callGenerateContentAnyVersion({
         apiKey,
         model: fallback,
         system: input.system,
         user: input.user
       });
-      json = (await res.json().catch(() => null)) as unknown;
+      res = second.res;
+      json = second.json;
       rawText = getTextFromGeminiResponse(json);
     }
   }
