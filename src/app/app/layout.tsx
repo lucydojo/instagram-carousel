@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isEmailAllowlisted, isCurrentUserSuperAdmin } from "@/lib/app/access";
-import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { getLocale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 
@@ -87,7 +86,6 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             ) : null}
           </div>
           <div className="flex items-center gap-3">
-            <LocaleSwitcher redirectTo="/app" />
             <span className="text-sm text-slate-600">{email}</span>
             <form action={signOut}>
               <button

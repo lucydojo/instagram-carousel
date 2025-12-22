@@ -31,13 +31,13 @@ const DEMO_TESTIMONIALS: Testimonial[] = [
         avatarSrc: "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix",
         name: "Alexandre",
         handle: "@alexandre",
-        text: "This tool totally revolutionized how we create carousels for our clients.",
+        text: "Essa ferramenta revolucionou como criamos carrosséis para nossos clientes.",
     },
     {
         avatarSrc: "https://api.dicebear.com/7.x/avataaars/svg?seed=Aneka",
         name: "Sarah M.",
         handle: "@sarah_designs",
-        text: "The glassmorphic UI is stunning and the AI generation is spot on.",
+        text: "A interface é linda e a geração por IA acertou em cheio.",
     },
 ];
 

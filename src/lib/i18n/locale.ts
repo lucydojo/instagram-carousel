@@ -1,4 +1,3 @@
-import { cookies, headers } from "next/headers";
 import type { SupportedLocale } from "@/lib/i18n/messages";
 
 export const DEFAULT_LOCALE: SupportedLocale = "pt-BR";
@@ -9,16 +8,6 @@ export function isSupportedLocale(value: unknown): value is SupportedLocale {
 }
 
 export async function getLocale(): Promise<SupportedLocale> {
-  const cookieStore = await cookies();
-  const fromCookie = cookieStore.get(LOCALE_COOKIE)?.value;
-  if (isSupportedLocale(fromCookie)) return fromCookie;
-
-  const headerStore = await headers();
-  const accept = headerStore.get("accept-language") ?? "";
-  const normalized = accept.toLowerCase();
-  if (normalized.includes("pt-br") || normalized.includes("pt")) return "pt-BR";
-  if (normalized.includes("en")) return "en";
-
   return DEFAULT_LOCALE;
 }
 

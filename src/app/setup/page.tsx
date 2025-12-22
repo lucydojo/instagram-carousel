@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getInstanceSettings } from "@/lib/app/instance";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
-import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { getLocale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 
@@ -301,9 +300,6 @@ export default async function SetupPage({
 
   return (
     <main className="relative mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 p-6">
-      <div className="absolute right-6 top-6">
-        <LocaleSwitcher redirectTo="/setup" />
-      </div>
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold">{t(locale, "setup.title")}</h1>
         <p className="text-sm text-slate-600">
