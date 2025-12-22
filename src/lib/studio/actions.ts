@@ -8,11 +8,13 @@ import { createSignedUrl } from "@/lib/studio/storage";
 
 const idSchema = z.string().uuid();
 
-function parseJsonOrThrow(value: string) {
+function parseJsonSafe(
+  value: string
+): { ok: true; value: unknown } | { ok: false; error: string } {
   try {
-    return JSON.parse(value) as unknown;
+    return { ok: true, value: JSON.parse(value) as unknown };
   } catch {
-    throw new Error("Invalid JSON.");
+    return { ok: false, error: "JSON inválido." };
   }
 }
 
@@ -28,19 +30,26 @@ export async function saveCarouselEditorStateFromForm(formData: FormData) {
     });
 
   if (!parsed.success) {
-    return { ok: false as const, error: "Invalid form." };
+    return { ok: false as const, error: "Formulário inválido." };
   }
 
-  const editorState = editorStateSchema.safeParse(
-    parseJsonOrThrow(parsed.data.editorStateJson)
-  );
+  const parsedJson = parseJsonSafe(parsed.data.editorStateJson);
+  if (!parsedJson.ok) {
+    return { ok: false as const, error: parsedJson.error };
+  }
+
+  const editorState = editorStateSchema.safeParse(parsedJson.value);
   if (!editorState.success) {
-    return { ok: false as const, error: "Invalid editor state." };
+    return {
+      ok: false as const,
+      error: "editor_state inválido (precisa conter {\"version\": number})."
+    };
   }
 
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) return { ok: false as const, error: "UNAUTHENTICATED" };
+  if (!userData.user)
+    return { ok: false as const, error: "Você precisa entrar novamente." };
 
   const { data: updated, error } = await supabase
     .from("carousels")
@@ -50,7 +59,10 @@ export async function saveCarouselEditorStateFromForm(formData: FormData) {
     .single();
 
   if (error || !updated) {
-    return { ok: false as const, error: error?.message ?? "Failed to save." };
+    return {
+      ok: false as const,
+      error: error?.message ?? "Não foi possível salvar."
+    };
   }
 
   return { ok: true as const, updatedAt: updated.updated_at };

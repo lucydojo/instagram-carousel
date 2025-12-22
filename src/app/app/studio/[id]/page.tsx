@@ -20,11 +20,17 @@ export default async function StudioPage({
 
   async function save(formData: FormData) {
     "use server";
-    const result = await saveCarouselEditorStateFromForm(formData);
-    if (!result.ok) {
-      redirect(`/app/studio/${id}?error=${encodeURIComponent(result.error)}`);
+    try {
+      const result = await saveCarouselEditorStateFromForm(formData);
+      if (!result.ok) {
+        redirect(`/app/studio/${id}?error=${encodeURIComponent(result.error)}`);
+      }
+      redirect(`/app/studio/${id}?saved=1`);
+    } catch {
+      redirect(
+        `/app/studio/${id}?error=${encodeURIComponent("Erro ao salvar. Tente novamente.")}`
+      );
     }
-    redirect(`/app/studio/${id}?saved=1`);
   }
 
   return (
@@ -98,4 +104,3 @@ export default async function StudioPage({
     </div>
   );
 }
-
