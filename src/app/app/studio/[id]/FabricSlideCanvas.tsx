@@ -42,10 +42,16 @@ function setObjectId(obj: FabricObject, id: string) {
 type Props = {
   slide: SlideV1;
   className?: string;
+  renderKey: string | number;
   onSlideChange: (next: SlideV1) => void;
 };
 
-export default function FabricSlideCanvas({ slide, className, onSlideChange }: Props) {
+export default function FabricSlideCanvas({
+  slide,
+  className,
+  renderKey,
+  onSlideChange
+}: Props) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasElRef = React.useRef<HTMLCanvasElement>(null);
   const fabricRef = React.useRef<Canvas | null>(null);
@@ -243,7 +249,9 @@ export default function FabricSlideCanvas({ slide, className, onSlideChange }: P
 
   React.useEffect(() => {
     renderSlide();
-  }, [renderSlide]);
+    // Intentionally only when `renderKey` changes (slide switching / external rehydrate),
+    // so typing doesn't cause the canvas to re-render and drop text editing focus.
+  }, [renderKey]);
 
   React.useEffect(() => {
     const container = containerRef.current;

@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { isRedirectError } from "next/dist/client/components/redirect-error";
 import {
   applyNaturalLanguageEdit,
   cleanupPlaceholderGeneratedAssets,
@@ -47,11 +48,22 @@ export async function studioSaveEditorState(formData: FormData) {
     const result = await saveCarouselEditorStateFromForm(formData);
     if (!result.ok) redirectBack(carouselId, formData, { error: result.error });
     redirectBack(carouselId, formData, { saved: "1", error: null });
-  } catch {
+  } catch (err) {
+    if (isRedirectError(err)) throw err;
     redirectBack(carouselId, formData, {
       error: "Erro ao salvar. Tente novamente."
     });
   }
+}
+
+export async function studioSaveEditorStateInline(input: {
+  carouselId: string;
+  editorStateJson: string;
+}) {
+  const formData = new FormData();
+  formData.set("carouselId", input.carouselId);
+  formData.set("editorStateJson", input.editorStateJson);
+  return await saveCarouselEditorStateFromForm(formData);
 }
 
 export async function studioGenerate(formData: FormData) {
@@ -127,4 +139,3 @@ export async function studioEdit(formData: FormData) {
     error: null
   });
 }
-

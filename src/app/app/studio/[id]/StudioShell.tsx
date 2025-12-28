@@ -23,6 +23,7 @@ import {
   studioEdit,
   studioGenerate,
   studioSaveEditorState,
+  studioSaveEditorStateInline,
   studioSaveLocks
 } from "./actions";
 import { MotionDock, MotionDockItem } from "./MotionDock";
@@ -110,10 +111,14 @@ type DockItem =
 
 export default function StudioShell(props: Props) {
   const router = useRouter();
+  const [isPending, startTransition] = React.useTransition();
   const [selectedSlideIndex, setSelectedSlideIndex] = React.useState(() =>
     clampInt(props.initialSlideIndex, 1, Math.max(1, props.slideCount))
   );
   const [dirty, setDirty] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = React.useState<string | null>(null);
+  const [canvasRevision, setCanvasRevision] = React.useState(0);
   const [leftOpen, setLeftOpen] = React.useState(false);
   const [assetsTab, setAssetsTab] = React.useState<"generated" | "reference">(
     "generated"
@@ -126,6 +131,9 @@ export default function StudioShell(props: Props) {
         slides: props.slides
       }
   );
+  const historyRef = React.useRef<
+    Map<number, { past: string[]; future: string[]; lastPushedAt: number }>
+  >(new Map());
 
   React.useEffect(() => {
     setDirty(false);
@@ -164,6 +172,101 @@ export default function StudioShell(props: Props) {
     typeof imagesDone === "number"
       ? Math.min(100, Math.max(0, (imagesDone / imagesTotal) * 100))
       : null;
+
+  const saveNow = React.useCallback(() => {
+    if (!dirty || isPending) return;
+    setSaveError(null);
+    startTransition(() => {
+      studioSaveEditorStateInline({
+        carouselId: props.carouselId,
+        editorStateJson
+      })
+        .then((result) => {
+          if (!result.ok) {
+            setSaveError(result.error);
+            return;
+          }
+          setDirty(false);
+          setLastSavedAt(result.updatedAt ?? new Date().toISOString());
+        })
+        .catch(() => {
+          setSaveError("Erro ao salvar. Tente novamente.");
+        });
+    });
+  }, [dirty, editorStateJson, isPending, props.carouselId, startTransition]);
+
+  React.useEffect(() => {
+    if (!dirty) return;
+    const t = window.setTimeout(() => {
+      saveNow();
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [dirty, editorStateJson, saveNow]);
+
+  function getHistoryEntry(index: number) {
+    const current = historyRef.current.get(index);
+    if (current) return current;
+    const created = { past: [] as string[], future: [] as string[], lastPushedAt: 0 };
+    historyRef.current.set(index, created);
+    return created;
+  }
+
+  function applySlideSnapshot(index: number, snapshotJson: string) {
+    const parsed = safeParseJson<SlideLike>(snapshotJson);
+    if (!parsed) return;
+    setEditorState((prev) => {
+      const prevSlides = Array.isArray(prev.slides)
+        ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+        : [...props.slides];
+      if (index - 1 >= 0 && index - 1 < prevSlides.length) {
+        prevSlides[index - 1] = parsed;
+      }
+      return { ...prev, slides: prevSlides };
+    });
+    setDirty(true);
+    setCanvasRevision((v) => v + 1);
+  }
+
+  React.useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isMeta = e.metaKey || e.ctrlKey;
+      if (!isMeta) return;
+      if (e.key.toLowerCase() !== "z") return;
+
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        active &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable)
+      ) {
+        return;
+      }
+
+      const entry = getHistoryEntry(selectedSlideIndex);
+      if (!entry) return;
+
+      if (e.shiftKey) {
+        const next = entry.future.pop();
+        if (!next) return;
+        const currentSnapshot = JSON.stringify(selectedSlide ?? {}, null, 0);
+        entry.past.push(currentSnapshot);
+        applySlideSnapshot(selectedSlideIndex, next);
+        e.preventDefault();
+        return;
+      }
+
+      const prev = entry.past.pop();
+      if (!prev) return;
+      const currentSnapshot = JSON.stringify(selectedSlide ?? {}, null, 0);
+      entry.future.push(currentSnapshot);
+      applySlideSnapshot(selectedSlideIndex, prev);
+      e.preventDefault();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applySlideSnapshot, selectedSlide, selectedSlideIndex]);
 
   function openLeft(dock: DockItem) {
     setActiveDock(dock);
@@ -229,8 +332,20 @@ export default function StudioShell(props: Props) {
         const prevSlides = Array.isArray(prev.slides)
           ? ([...(prev.slides as SlideLike[])] as SlideLike[])
           : [...props.slides];
-        if (selectedSlideIndex - 1 >= 0 && selectedSlideIndex - 1 < prevSlides.length) {
-          prevSlides[selectedSlideIndex - 1] = nextSlide as unknown as SlideLike;
+
+        const idx = selectedSlideIndex - 1;
+        const prevSlide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
+        const entry = getHistoryEntry(selectedSlideIndex);
+        const now = Date.now();
+        if (prevSlide && now - entry.lastPushedAt > 600) {
+          const snapshot = JSON.stringify(prevSlide);
+          const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
+          if (snapshot !== last) entry.past.push(snapshot);
+          entry.future = [];
+          entry.lastPushedAt = now;
+        }
+        if (idx >= 0 && idx < prevSlides.length) {
+          prevSlides[idx] = nextSlide as unknown as SlideLike;
         }
         return { ...prev, slides: prevSlides };
       });
@@ -827,18 +942,14 @@ export default function StudioShell(props: Props) {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <form action={saveEditorStateAction} className="hidden sm:block">
-                  <input type="hidden" name="carouselId" value={props.carouselId} />
-                  <input type="hidden" name="currentSlide" value={selectedSlideIndex} />
-                  <input type="hidden" name="editorStateJson" value={editorStateJson} />
-                  <button
-                    type="submit"
-                    disabled={!dirty}
-                    className="rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background/70"
-                  >
-                    Salvar
-                  </button>
-                </form>
+                <button
+                  type="button"
+                  onClick={saveNow}
+                  disabled={!dirty || isPending}
+                  className="hidden rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background/70 sm:block"
+                >
+                  {isPending ? "Salvando..." : "Salvar"}
+                </button>
                 <button
                   type="button"
                   onClick={() => setLeftOpen((v) => !v)}
@@ -846,6 +957,15 @@ export default function StudioShell(props: Props) {
                 >
                   Painel
                 </button>
+                {saveError ? (
+                  <span className="hidden text-sm text-red-600 sm:block">
+                    {saveError}
+                  </span>
+                ) : !dirty && lastSavedAt ? (
+                  <span className="hidden text-sm text-muted-foreground sm:block">
+                    Salvo
+                  </span>
+                ) : null}
               </div>
             </div>
 
@@ -859,6 +979,7 @@ export default function StudioShell(props: Props) {
                 </div>
                 <FabricSlideCanvas
                   slide={canvasSlide}
+                  renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}
                 />
               </div>
