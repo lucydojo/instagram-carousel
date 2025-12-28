@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
   Bookmark,
@@ -24,6 +25,7 @@ import {
   studioSaveEditorState,
   studioSaveLocks
 } from "./actions";
+import { MotionDock, MotionDockItem } from "./MotionDock";
 
 type Asset = {
   id: string;
@@ -122,38 +124,6 @@ type DockItem =
   | "presets"
   | "locks"
   | "json";
-
-function DockButton({
-  active,
-  icon,
-  label,
-  onClick
-}: {
-  active: boolean;
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "group relative flex h-10 w-10 items-center justify-center rounded-xl transition",
-        active
-          ? "bg-primary text-primary-foreground"
-          : "text-neutral-300 hover:bg-white/10 hover:text-white"
-      ].join(" ")}
-      aria-label={label}
-      title={label}
-    >
-      <span className="transition-transform group-hover:translate-x-1">{icon}</span>
-      <span className="pointer-events-none absolute left-full top-1/2 ml-3 hidden -translate-y-1/2 whitespace-nowrap rounded-lg border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm opacity-0 transition group-hover:opacity-100 md:block">
-        {label}
-      </span>
-    </button>
-  );
-}
 
 export default function StudioShell(props: Props) {
   const router = useRouter();
@@ -309,176 +279,193 @@ export default function StudioShell(props: Props) {
         <main className="relative mt-6">
           {/* Floating dock */}
           <div className="fixed left-5 top-1/2 z-40 hidden -translate-y-1/2 md:block">
-            <div className="flex flex-col gap-2 rounded-2xl border border-neutral-800 bg-neutral-900/90 p-2 shadow-sm backdrop-blur">
-              <DockButton
+            <MotionDock className="border-border">
+              <MotionDockItem
                 active={false}
-                icon={<ArrowLeft className="h-5 w-5" />}
                 label="Voltar ao projeto"
-                onClick={() => {
-                  router.push(`/app/carousels/${props.carouselId}`);
-                }}
-              />
-              <DockButton
+                onClick={() => router.push(`/app/carousels/${props.carouselId}`)}
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={false}
-                icon={<LayoutGrid className="h-5 w-5" />}
                 label="Carrosséis"
-                onClick={() => {
-                  router.push("/app");
-                }}
-              />
-              <div className="my-1 h-px bg-border" />
+                onClick={() => router.push("/app")}
+              >
+                <LayoutGrid className="h-5 w-5" />
+              </MotionDockItem>
 
-              <DockButton
+              <div className="my-1 h-px w-full bg-border" />
+
+              <MotionDockItem
                 active={leftOpen && activeDock === "generate"}
-                icon={<Sparkles className="h-5 w-5" />}
                 label="IA"
                 onClick={() => toggleLeft("generate")}
-              />
-              <DockButton
+              >
+                <Sparkles className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "assets"}
-                icon={<ImageIcon className="h-5 w-5" />}
                 label="Assets"
                 onClick={() => toggleLeft("assets")}
-              />
-              <DockButton
+              >
+                <ImageIcon className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "templates"}
-                icon={<LayoutTemplate className="h-5 w-5" />}
                 label="Templates"
                 onClick={() => toggleLeft("templates")}
-              />
-              <DockButton
+              >
+                <LayoutTemplate className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "presets"}
-                icon={<Bookmark className="h-5 w-5" />}
                 label="Presets"
                 onClick={() => toggleLeft("presets")}
-              />
-              <DockButton
+              >
+                <Bookmark className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "brand"}
-                icon={<UserCircle2 className="h-5 w-5" />}
                 label="Brand"
                 onClick={() => toggleLeft("brand")}
-              />
-              <DockButton
+              >
+                <UserCircle2 className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "colors"}
-                icon={<Palette className="h-5 w-5" />}
                 label="Cores"
                 onClick={() => toggleLeft("colors")}
-              />
-              <DockButton
+              >
+                <Palette className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "text"}
-                icon={<Type className="h-5 w-5" />}
                 label="Texto"
                 onClick={() => toggleLeft("text")}
-              />
-              <div className="my-1 h-px bg-border" />
-              <DockButton
+              >
+                <Type className="h-5 w-5" />
+              </MotionDockItem>
+
+              <div className="my-1 h-px w-full bg-border" />
+
+              <MotionDockItem
                 active={leftOpen && activeDock === "locks"}
-                icon={<Lock className="h-5 w-5" />}
                 label="Locks"
                 onClick={() => toggleLeft("locks")}
-              />
-              <DockButton
+              >
+                <Lock className="h-5 w-5" />
+              </MotionDockItem>
+              <MotionDockItem
                 active={leftOpen && activeDock === "json"}
-                icon={<Code2 className="h-5 w-5" />}
                 label="Editor state"
                 onClick={() => toggleLeft("json")}
-              />
-            </div>
+              >
+                <Code2 className="h-5 w-5" />
+              </MotionDockItem>
+            </MotionDock>
           </div>
 
           {/* Left panel */}
-          <aside
-            className={[
-              "fixed left-24 top-1/2 z-30 hidden w-[380px] -translate-y-1/2 md:block",
-              "transition-transform duration-200 ease-out",
-              leftOpen ? "translate-x-0" : "-translate-x-[120%]"
-            ].join(" ")}
-            aria-hidden={!leftOpen}
-          >
-            <div className="max-h-[calc(100vh-9rem)] overflow-hidden rounded-3xl border bg-background/90 shadow-lg backdrop-blur">
-              <div className="flex items-center justify-between border-b px-4 py-3">
-                <div className="text-base font-semibold">
-                  {activeDock === "generate"
-                    ? "Geração"
-                    : activeDock === "command"
-                      ? "Edição por comando"
-                      : activeDock === "assets"
-                        ? "Assets"
-                        : activeDock === "templates"
-                          ? "Templates"
-                          : activeDock === "presets"
-                            ? "Presets"
-                        : activeDock === "brand"
-                          ? "Branding"
-                        : activeDock === "colors"
-                          ? "Cores"
-                        : activeDock === "text"
-                          ? "Texto"
-                          : activeDock === "locks"
-                            ? "Locks"
-                            : activeDock === "json"
-                              ? "Editor state"
-                              : "Studio"}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setLeftOpen(false)}
-                  className="rounded-xl p-2 hover:bg-secondary"
-                  aria-label="Fechar painel"
-                >
-                  <ChevronLeft className="h-5 w-5 text-muted-foreground" />
-                </button>
-              </div>
+          <AnimatePresence>
+            {leftOpen ? (
+              <motion.aside
+                initial={{ opacity: 0, x: -28 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -28 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="fixed left-24 top-1/2 z-30 hidden w-[380px] -translate-y-1/2 md:block"
+              >
+                <div className="max-h-[calc(100vh-9rem)] overflow-hidden rounded-3xl border border-border bg-background/90 shadow-lg backdrop-blur">
+                  <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                    <div className="text-base font-semibold">
+                      {activeDock === "generate"
+                        ? "Geração"
+                        : activeDock === "command"
+                          ? "Edição por comando"
+                          : activeDock === "assets"
+                            ? "Assets"
+                            : activeDock === "templates"
+                              ? "Templates"
+                              : activeDock === "presets"
+                                ? "Presets"
+                            : activeDock === "brand"
+                              ? "Branding"
+                            : activeDock === "colors"
+                              ? "Cores"
+                            : activeDock === "text"
+                              ? "Texto"
+                              : activeDock === "locks"
+                                ? "Locks"
+                                : activeDock === "json"
+                                  ? "Editor state"
+                                  : "Studio"}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLeftOpen(false)}
+                      className="rounded-xl p-2 hover:bg-secondary"
+                      aria-label="Fechar painel"
+                    >
+                      <ChevronLeft className="h-5 w-5 text-muted-foreground" />
+                    </button>
+                  </div>
 
-              <div className="max-h-[calc(100vh-13rem)] overflow-auto p-4">
-                {showGenerate ? (
-                  <div className="space-y-6">
-                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
-                      <div className="flex items-center justify-between">
-                        <div className="text-base font-medium">Geração (IA)</div>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                          {props.statusLabel}
-                        </span>
-                      </div>
-
-                      <div className="space-y-2 text-xs text-muted-foreground">
-                        {progressPct !== null ? (
-                          <>
-                            <div className="flex items-center justify-between">
-                              <span>Imagens</span>
-                              <span className="font-mono">
-                                {imagesDone ?? 0}/{imagesTotal ?? 0}
-                                {typeof imagesFailed === "number" &&
-                                imagesFailed > 0
-                                  ? ` • falhas ${imagesFailed}`
-                                  : ""}
-                              </span>
+                  <div className="max-h-[calc(100vh-13rem)] overflow-auto p-4">
+                    {showGenerate ? (
+                      <div className="space-y-6">
+                        <section className="space-y-3 rounded-2xl border border-border bg-background px-4 py-3">
+                          <div className="flex items-center justify-between">
+                            <div className="text-base font-medium">
+                              Geração (IA)
                             </div>
-                            <div className="h-2 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className="h-full bg-primary"
-                                style={{ width: `${progressPct}%` }}
-                              />
-                            </div>
-                          </>
-                        ) : (
-                          <div className="text-xs text-muted-foreground">
-                            Gere um rascunho para preencher os slides.
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              {props.statusLabel}
+                            </span>
                           </div>
-                        )}
-                      </div>
 
-                      <form action={generateAction} className="space-y-2">
-                        <input type="hidden" name="carouselId" value={props.carouselId} />
-                        <input
-                          type="hidden"
-                          name="currentSlide"
-                          value={selectedSlideIndex}
-                        />
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-muted-foreground">
-                            Modelo de imagem
-                          </label>
+                          <div className="space-y-2 text-xs text-muted-foreground">
+                            {progressPct !== null ? (
+                              <>
+                                <div className="flex items-center justify-between">
+                                  <span>Imagens</span>
+                                  <span className="font-mono">
+                                    {imagesDone ?? 0}/{imagesTotal ?? 0}
+                                    {typeof imagesFailed === "number" &&
+                                    imagesFailed > 0
+                                      ? ` • falhas ${imagesFailed}`
+                                      : ""}
+                                  </span>
+                                </div>
+                                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                                  <div
+                                    className="h-full bg-primary"
+                                    style={{ width: `${progressPct}%` }}
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-xs text-muted-foreground">
+                                Gere um rascunho para preencher os slides.
+                              </div>
+                            )}
+                          </div>
+
+                          <form action={generateAction} className="space-y-2">
+                            <input
+                              type="hidden"
+                              name="carouselId"
+                              value={props.carouselId}
+                            />
+                            <input
+                              type="hidden"
+                              name="currentSlide"
+                              value={selectedSlideIndex}
+                            />
+                            <div className="space-y-1">
+                              <label className="text-xs font-medium text-muted-foreground">
+                                Modelo de imagem
+                              </label>
                           <select
                             name="imageModel"
                             className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
@@ -787,7 +774,9 @@ export default function StudioShell(props: Props) {
                 ) : null}
               </div>
             </div>
-          </aside>
+              </motion.aside>
+            ) : null}
+          </AnimatePresence>
 
           {/* Canvas */}
           <section className="relative mx-auto max-w-[980px] pb-8 pt-4">
@@ -860,7 +849,10 @@ export default function StudioShell(props: Props) {
             ) : null}
 
             {/* Subtle hints */}
-            <div className="mt-4 text-center text-xs text-muted-foreground">
+            <div
+              className="mt-4 text-center text-xs text-muted-foreground transition-transform duration-200 ease-out"
+              style={{ transform: `translateX(${leftShiftPx}px)` }}
+            >
               Dica: pressione <span className="font-mono">Esc</span> para fechar painéis.
             </div>
           </section>
