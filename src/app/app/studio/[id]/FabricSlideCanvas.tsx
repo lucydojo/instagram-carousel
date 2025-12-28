@@ -31,6 +31,7 @@ export type FabricSlideCanvasHandle = {
   duplicateSelection: () => boolean;
   copySelection: () => boolean;
   paste: () => boolean;
+  exportPngDataUrl: (targetSize?: number) => string | null;
 };
 
 function clampNumber(value: unknown, fallback: number) {
@@ -276,6 +277,20 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     return paste();
   }, [copySelection, paste]);
 
+  const exportPngDataUrl = React.useCallback((targetSize = 1080) => {
+    const canvas = fabricRef.current;
+    if (!canvas) return null;
+    const w = canvas.getWidth();
+    const h = canvas.getHeight();
+    if (!w || !h) return null;
+
+    // Export at a stable, known size (Instagram: 1080x1080). We scale from the
+    // current backstore size to avoid any DPR-specific artifacts.
+    const base = Math.min(w, h);
+    const multiplier = Math.max(0.1, targetSize / base);
+    return canvas.toDataURL({ format: "png", multiplier });
+  }, []);
+
   React.useImperativeHandle(
     ref,
     () => ({
@@ -283,9 +298,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       deleteSelection,
       duplicateSelection,
       copySelection,
-      paste
+      paste,
+      exportPngDataUrl
     }),
-    [addText, copySelection, deleteSelection, duplicateSelection, paste]
+    [addText, copySelection, deleteSelection, duplicateSelection, exportPngDataUrl, paste]
   );
 
   React.useEffect(() => {

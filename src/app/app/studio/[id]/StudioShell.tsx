@@ -9,6 +9,7 @@ import {
   Bookmark,
   ChevronLeft,
   Code2,
+  Download,
   Image as ImageIcon,
   LayoutTemplate,
   LayoutGrid,
@@ -405,6 +406,22 @@ export default function StudioShell(props: Props) {
     },
     [props.slides, selectedSlideIndex]
   );
+
+  const downloadActiveSlidePng = React.useCallback(() => {
+    const api = canvasApiRef.current;
+    if (!api) return;
+    const dataUrl = api.exportPngDataUrl(1080);
+    if (!dataUrl) {
+      setSaveError("Não foi possível exportar o slide.");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `dojogram_${props.carouselId}_slide_${selectedSlideIndex}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }, [props.carouselId, selectedSlideIndex]);
 
   return (
     <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-screen w-screen overflow-x-hidden bg-muted/30">
@@ -1009,6 +1026,14 @@ export default function StudioShell(props: Props) {
                 </span>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={downloadActiveSlidePng}
+                  className="hidden items-center gap-2 rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary sm:inline-flex"
+                >
+                  <Download className="h-4 w-4" />
+                  Baixar PNG
+                </button>
                 <button
                   type="button"
                   onClick={saveNow}
