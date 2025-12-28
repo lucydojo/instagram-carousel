@@ -87,9 +87,20 @@ export default function FabricSlideCanvas({
 
     const canvas = new Canvas(el, {
       selection: true,
-      preserveObjectStacking: true
+      preserveObjectStacking: true,
+      // Important: Fabric's retina scaling can misalign IText/Textbox cursor
+      // metrics on high-DPR displays when combined with responsive sizing.
+      // We keep a large backstore (e.g. 1080x1080) and scale via CSS instead.
+      enableRetinaScaling: false
     });
     fabricRef.current = canvas;
+
+    const onEditingEntered = (e: { target?: FabricObject }) => {
+      const target = e.target as unknown as { initDimensions?: () => void } | undefined;
+      target?.initDimensions?.();
+      canvas.calcOffset();
+      canvas.requestRenderAll();
+    };
 
     const onModified = (e: { target?: FabricObject }) => {
       if (isHydratingRef.current) return;
@@ -175,10 +186,12 @@ export default function FabricSlideCanvas({
 
     canvas.on("object:modified", onModified);
     canvas.on("text:changed", onTextChanged);
+    canvas.on("text:editing:entered", onEditingEntered);
 
     return () => {
       canvas.off("object:modified", onModified);
       canvas.off("text:changed", onTextChanged);
+      canvas.off("text:editing:entered", onEditingEntered);
       canvas.dispose();
       fabricRef.current = null;
     };
@@ -196,12 +209,23 @@ export default function FabricSlideCanvas({
     if (size <= 0) return;
     const slideW = clampNumber(slide.width, 1080);
     const slideH = clampNumber(slide.height, 1080);
-    // Keep the canvas coordinate system at "slide resolution" (e.g. 1080x1080)
-    // and only scale via CSS. This avoids fractional viewport zoom which can
-    // cause caret/selection rendering to drift inside characters.
-    canvas.setDimensions({ width: slideW, height: slideH }, { cssOnly: false });
+    const dpr =
+      typeof window !== "undefined" && typeof window.devicePixelRatio === "number"
+        ? window.devicePixelRatio
+        : 1;
+    // Make the backstore match the visible size (accounting for DPR) and use
+    // viewport zoom to map "slide coordinates" (e.g. 1080x1080) into it.
+    // This keeps Fabric's cursor math in the same coordinate space it renders.
+    const internalW = Math.max(1, Math.round(size * dpr));
+    const internalH = Math.max(1, Math.round(size * dpr));
+
+    const scale = Math.min(internalW / slideW, internalH / slideH);
+    const tx = (internalW - slideW * scale) / 2;
+    const ty = (internalH - slideH * scale) / 2;
+
+    canvas.setDimensions({ width: internalW, height: internalH }, { cssOnly: false });
     canvas.setDimensions({ width: size, height: size }, { cssOnly: true });
-    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    canvas.setViewportTransform([scale, 0, 0, scale, tx, ty]);
     canvas.calcOffset();
     canvas.requestRenderAll();
   }, [slide.height, slide.width]);
@@ -234,7 +258,10 @@ export default function FabricSlideCanvas({
         width,
         originX: "left",
         originY: "top",
-        fontFamily: "Inter, ui-sans-serif, system-ui",
+        // Use a reliably available font stack to keep text measurement stable
+        // (cursor positioning depends on accurate glyph metrics).
+        fontFamily:
+          "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
         fontSize: clampNumber(raw.fontSize, 56),
         fontWeight: clampNumber(raw.fontWeight, 600),
         fill: raw.fill ?? "#111827",
