@@ -194,11 +194,15 @@ export default function FabricSlideCanvas({
     const box = container.getBoundingClientRect();
     const size = Math.floor(Math.min(box.width, box.height));
     if (size <= 0) return;
-    canvas.setDimensions({ width: size, height: size }, { cssOnly: false });
     const slideW = clampNumber(slide.width, 1080);
     const slideH = clampNumber(slide.height, 1080);
-    const zoom = size / Math.max(slideW, slideH);
-    canvas.setViewportTransform([zoom, 0, 0, zoom, 0, 0]);
+    // Keep the canvas coordinate system at "slide resolution" (e.g. 1080x1080)
+    // and only scale via CSS. This avoids fractional viewport zoom which can
+    // cause caret/selection rendering to drift inside characters.
+    canvas.setDimensions({ width: slideW, height: slideH }, { cssOnly: false });
+    canvas.setDimensions({ width: size, height: size }, { cssOnly: true });
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    canvas.calcOffset();
     canvas.requestRenderAll();
   }, [slide.height, slide.width]);
 
