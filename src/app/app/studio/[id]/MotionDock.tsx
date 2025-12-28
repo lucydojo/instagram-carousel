@@ -27,28 +27,31 @@ function useDock() {
 }
 
 const DEFAULT_SPRING: SpringOptions = { mass: 0.12, stiffness: 180, damping: 14 };
+const DEFAULT_PANEL_WIDTH = 52;
 
 export function MotionDock({
   children,
   className,
   magnification = 78,
   distance = 150,
-  spring = DEFAULT_SPRING
+  spring = DEFAULT_SPRING,
+  panelWidth = DEFAULT_PANEL_WIDTH
 }: {
   children: React.ReactNode;
   className?: string;
   magnification?: number;
   distance?: number;
   spring?: SpringOptions;
+  panelWidth?: number;
 }) {
   const mouseY = useMotionValue(Infinity);
   const isHovered = useMotionValue(0);
 
   const maxWidth = React.useMemo(() => {
-    return Math.max(56, magnification + magnification / 2 + 4);
-  }, [magnification]);
+    return Math.max(panelWidth, magnification + magnification / 2 + 4);
+  }, [magnification, panelWidth]);
 
-  const widthRow = useTransform(isHovered, [0, 1], [52, maxWidth]);
+  const widthRow = useTransform(isHovered, [0, 1], [panelWidth, maxWidth]);
   const width = useSpring(widthRow, spring);
 
   return (
@@ -62,16 +65,21 @@ export function MotionDock({
         isHovered.set(0);
         mouseY.set(Infinity);
       }}
-      className={[
-        "flex flex-col items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-md",
-        className ?? ""
-      ].join(" ")}
+      className="flex items-center justify-center overflow-visible"
       role="toolbar"
       aria-label="Dock"
     >
-      <DockContext.Provider value={{ mouseY, spring, magnification, distance }}>
-        {children}
-      </DockContext.Provider>
+      <motion.div
+        style={{ width: panelWidth }}
+        className={[
+          "flex w-fit flex-col items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-md",
+          className ?? ""
+        ].join(" ")}
+      >
+        <DockContext.Provider value={{ mouseY, spring, magnification, distance }}>
+          {children}
+        </DockContext.Provider>
+      </motion.div>
     </motion.div>
   );
 }
@@ -103,6 +111,7 @@ export function MotionDockItem({
   );
 
   const size = useSpring(sizeTransform, spring);
+  const iconSize = useTransform(size, (v) => v / 2);
 
   return (
     <motion.button
@@ -122,7 +131,10 @@ export function MotionDockItem({
       ].join(" ")}
       aria-label={label}
     >
-      <motion.div style={{ width: useTransform(size, (v) => v / 2) }} className="flex items-center justify-center">
+      <motion.div
+        style={{ width: iconSize, height: iconSize }}
+        className="flex items-center justify-center"
+      >
         {children}
       </motion.div>
 

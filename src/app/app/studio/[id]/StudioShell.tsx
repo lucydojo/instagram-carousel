@@ -285,14 +285,14 @@ export default function StudioShell(props: Props) {
                 label="Voltar ao projeto"
                 onClick={() => router.push(`/app/carousels/${props.carouselId}`)}
               >
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={false}
                 label="Carrosséis"
                 onClick={() => router.push("/app")}
               >
-                <LayoutGrid className="h-5 w-5" />
+                <LayoutGrid className="h-full w-full" />
               </MotionDockItem>
 
               <div className="my-1 h-px w-full bg-border" />
@@ -302,49 +302,49 @@ export default function StudioShell(props: Props) {
                 label="IA"
                 onClick={() => toggleLeft("generate")}
               >
-                <Sparkles className="h-5 w-5" />
+                <Sparkles className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "assets"}
                 label="Assets"
                 onClick={() => toggleLeft("assets")}
               >
-                <ImageIcon className="h-5 w-5" />
+                <ImageIcon className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "templates"}
                 label="Templates"
                 onClick={() => toggleLeft("templates")}
               >
-                <LayoutTemplate className="h-5 w-5" />
+                <LayoutTemplate className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "presets"}
                 label="Presets"
                 onClick={() => toggleLeft("presets")}
               >
-                <Bookmark className="h-5 w-5" />
+                <Bookmark className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "brand"}
                 label="Brand"
                 onClick={() => toggleLeft("brand")}
               >
-                <UserCircle2 className="h-5 w-5" />
+                <UserCircle2 className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "colors"}
                 label="Cores"
                 onClick={() => toggleLeft("colors")}
               >
-                <Palette className="h-5 w-5" />
+                <Palette className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "text"}
                 label="Texto"
                 onClick={() => toggleLeft("text")}
               >
-                <Type className="h-5 w-5" />
+                <Type className="h-full w-full" />
               </MotionDockItem>
 
               <div className="my-1 h-px w-full bg-border" />
@@ -354,14 +354,14 @@ export default function StudioShell(props: Props) {
                 label="Locks"
                 onClick={() => toggleLeft("locks")}
               >
-                <Lock className="h-5 w-5" />
+                <Lock className="h-full w-full" />
               </MotionDockItem>
               <MotionDockItem
                 active={leftOpen && activeDock === "json"}
                 label="Editor state"
                 onClick={() => toggleLeft("json")}
               >
-                <Code2 className="h-5 w-5" />
+                <Code2 className="h-full w-full" />
               </MotionDockItem>
             </MotionDock>
           </div>
