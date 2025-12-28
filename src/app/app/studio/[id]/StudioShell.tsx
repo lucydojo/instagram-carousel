@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   studioCleanup,
+  studioCreatePalette,
   studioEdit,
   studioGenerate,
   studioSaveEditorState,
@@ -251,12 +252,33 @@ function parsePaletteV1(value: unknown): PaletteV1 | null {
   return { background, text, accent };
 }
 
+function toHexColor(value: string): string | null {
+  const v = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(v)) {
+    const r = v[1]!;
+    const g = v[2]!;
+    const b = v[3]!;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return null;
+}
+
 function rectToPx(rect: Rect01, width: number, height: number) {
   return {
     x: Math.round(rect.x * width),
     y: Math.round(rect.y * height),
     w: Math.round(rect.w * width),
     h: Math.round(rect.h * height)
+  };
+}
+
+function rectToPct(rect: { x: number; y: number; w: number; h: number }) {
+  return {
+    left: `${rect.x * 100}%`,
+    top: `${rect.y * 100}%`,
+    width: `${rect.w * 100}%`,
+    height: `${rect.h * 100}%`
   };
 }
 
@@ -379,15 +401,6 @@ export default function StudioShell(props: Props) {
     return Array.from(byId.values());
   }, [props.templates]);
 
-  const paletteOptions = React.useMemo(() => {
-    return props.palettes
-      .map((p) => {
-        const parsed = parsePaletteV1(p.palette_data);
-        return parsed ? { ...p, palette: parsed } : null;
-      })
-      .filter((v): v is NonNullable<typeof v> => Boolean(v));
-  }, [props.palettes]);
-
   const selectedTemplateId =
     typeof currentGlobal.templateId === "string"
       ? currentGlobal.templateId
@@ -396,6 +409,22 @@ export default function StudioShell(props: Props) {
           if (isTemplateDataV1(embedded)) return embedded.id;
           return BUILTIN_TEMPLATES[0]?.id ?? "builtin/background-overlay";
         })();
+
+  const effectiveTemplate = React.useMemo(() => {
+    const embedded = currentGlobal.templateData;
+    if (isTemplateDataV1(embedded)) return embedded;
+    const found = templateOptions.find((t) => t.id === selectedTemplateId);
+    return found ?? BUILTIN_TEMPLATES[0]!;
+  }, [currentGlobal.templateData, selectedTemplateId, templateOptions]);
+
+  const paletteOptions = React.useMemo(() => {
+    return props.palettes
+      .map((p) => {
+        const parsed = parsePaletteV1(p.palette_data);
+        return parsed ? { ...p, palette: parsed } : null;
+      })
+      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+  }, [props.palettes]);
 
   const selectedPaletteId =
     typeof currentGlobal.paletteId === "string"
@@ -463,7 +492,32 @@ export default function StudioShell(props: Props) {
             };
           });
 
-          return { ...slideObj, objects: nextObjects };
+          // Ensure image slot placeholders exist in the editor_state.
+          const existingSlotIds = new Set(
+            objects
+              .map((o) => (typeof (o as Record<string, unknown>).slotId === "string"
+                ? String((o as Record<string, unknown>).slotId)
+                : null))
+              .filter((v): v is string => Boolean(v))
+          );
+          const placeholders = template.images
+            .filter((img) => img.kind === "slot")
+            .filter((img) => !existingSlotIds.has(img.id))
+            .map((img) => {
+              const rect = rectToPx(img.bounds, w, h);
+              return {
+                id: `image_${img.id}`,
+                type: "image",
+                slotId: img.id,
+                x: rect.x,
+                y: rect.y,
+                width: rect.w,
+                height: rect.h,
+                assetId: null
+              } as Record<string, unknown>;
+            });
+
+          return { ...slideObj, objects: [...nextObjects, ...placeholders] };
         });
 
         const prevGlobal =
@@ -483,11 +537,8 @@ export default function StudioShell(props: Props) {
     [props.slides]
   );
 
-  const applyPalette = React.useCallback(() => {
-    const paletteItem = paletteOptions.find((p) => p.id === pendingPaletteId);
-    if (!paletteItem) return;
-    const palette = paletteItem.palette;
-
+  const applyPaletteColors = React.useCallback(
+    (palette: PaletteV1, paletteId: string | null) => {
     setEditorState((prev) => {
       const prevSlides = Array.isArray(prev.slides)
         ? ([...(prev.slides as SlideLike[])] as SlideLike[])
@@ -522,7 +573,7 @@ export default function StudioShell(props: Props) {
           : {};
       const nextGlobal = {
         ...prevGlobal,
-        paletteId: paletteItem.id,
+        paletteId,
         paletteData: palette
       };
 
@@ -530,7 +581,38 @@ export default function StudioShell(props: Props) {
     });
     setDirty(true);
     setCanvasRevision((v) => v + 1);
-  }, [paletteOptions, pendingPaletteId, props.slides]);
+    },
+    [props.slides]
+  );
+
+  const [customPalette, setCustomPalette] = React.useState<PaletteV1>(() => {
+    const fromGlobal = parsePaletteV1(currentGlobal.paletteData);
+    return (
+      fromGlobal ?? {
+        background: "#ffffff",
+        text: "#111827",
+        accent: "#7c3aed"
+      }
+    );
+  });
+
+  React.useEffect(() => {
+    const fromGlobal = parsePaletteV1(currentGlobal.paletteData);
+    if (fromGlobal) setCustomPalette(fromGlobal);
+  }, [currentGlobal.paletteData]);
+
+  const saveCustomPalette = React.useCallback(async () => {
+    const name = `Custom ${new Date().toLocaleDateString("pt-BR")}`;
+    const result = await studioCreatePalette({
+      name,
+      paletteData: customPalette as unknown as Record<string, unknown>
+    });
+    if (!result.ok) {
+      setSaveError("Não foi possível salvar a paleta.");
+      return null;
+    }
+    return result.id;
+  }, [customPalette]);
 
   const imagesTotal = props.progress.imagesTotal;
   const imagesDone = props.progress.imagesDone;
@@ -695,6 +777,21 @@ export default function StudioShell(props: Props) {
         : null;
     return { ...(s as unknown as SlideV1), width, height, objects, background };
   }, [selectedSlide]);
+
+  const missingImageSlots = React.useMemo(() => {
+    const objects = canvasSlide.objects ?? [];
+    const filled = new Set<string>();
+    for (const o of objects as unknown as Array<Record<string, unknown>>) {
+      if (o.type !== "image") continue;
+      const slotId = typeof o.slotId === "string" ? o.slotId : null;
+      const assetId = typeof o.assetId === "string" ? o.assetId : null;
+      if (slotId && assetId) filled.add(slotId);
+    }
+    return (effectiveTemplate.images ?? [])
+      .filter((img) => img.kind === "slot")
+      .filter((img) => !filled.has(img.id))
+      .map((img) => ({ id: img.id, bounds: img.bounds }));
+  }, [canvasSlide.objects, effectiveTemplate.images]);
 
   const onCanvasSlideChange = React.useCallback(
     (nextSlide: SlideV1) => {
@@ -1218,70 +1315,156 @@ export default function StudioShell(props: Props) {
                 ) : null}
 
                 {showColors ? (
-                  <div className="rounded-2xl border bg-background px-4 py-3">
-                    <div className="text-base font-medium">Cores</div>
+                  <div className="space-y-3">
+                    <div className="text-sm font-semibold">Cores</div>
+
+                    {/* Custom palette (always available) */}
+                    <div className="rounded-xl border bg-background/70 p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          Custom
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div
+                            className="h-4 w-4 rounded-md border"
+                            style={{ background: customPalette.background }}
+                            title="Background"
+                          />
+                          <div
+                            className="h-4 w-4 rounded-md border"
+                            style={{ background: customPalette.text }}
+                            title="Text"
+                          />
+                          <div
+                            className="h-4 w-4 rounded-md border"
+                            style={{ background: customPalette.accent }}
+                            title="Accent"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {(
+                          [
+                            ["background", "Fundo"],
+                            ["text", "Texto"],
+                            ["accent", "Destaque"]
+                          ] as const
+                        ).map(([key, label]) => (
+                          <label key={key} className="space-y-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              {label}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={customPalette[key]}
+                                onChange={(e) =>
+                                  setCustomPalette((prev) => ({
+                                    ...prev,
+                                    [key]: e.target.value
+                                  }))
+                                }
+                                className="h-9 w-9 cursor-pointer rounded-lg border bg-background p-1"
+                              />
+                              <input
+                                value={customPalette[key]}
+                                onChange={(e) => {
+                                  const next = toHexColor(e.target.value);
+                                  if (!next) return;
+                                  setCustomPalette((prev) => ({ ...prev, [key]: next }));
+                                }}
+                                className="h-9 w-full rounded-lg border bg-background px-2 font-mono text-xs"
+                              />
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPendingPaletteId(null);
+                            applyPaletteColors(customPalette, null);
+                          }}
+                          className="flex-1 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                          Aplicar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            startTransition(async () => {
+                              const id = await saveCustomPalette();
+                              if (!id) return;
+                              setPendingPaletteId(id);
+                              // Apply immediately using the custom palette colors.
+                              applyPaletteColors(customPalette, id);
+                            });
+                          }}
+                          className="rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
+                        >
+                          Salvar
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Palette presets */}
                     {paletteOptions.length === 0 ? (
-                      <div className="mt-2 text-xs text-muted-foreground">
+                      <div className="text-xs text-muted-foreground">
                         Nenhuma paleta disponível ainda.
                       </div>
                     ) : (
-                      <div className="mt-3 space-y-3">
-                        <div className="grid gap-2">
-                          {paletteOptions.slice(0, 12).map((p) => {
+                      <div className="space-y-2">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          Presets
+                        </div>
+                        <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
+                          {paletteOptions.map((p) => {
                             const checked = p.id === pendingPaletteId;
                             return (
-                              <label
+                              <button
                                 key={p.id}
+                                type="button"
+                                onClick={() => {
+                                  setPendingPaletteId(p.id);
+                                  // Apply immediately (PostNitro-style).
+                                  applyPaletteColors(p.palette, p.id);
+                                }}
                                 className={[
-                                  "flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 transition",
-                                  checked ? "border-primary bg-primary/5" : "hover:bg-secondary"
+                                  "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition",
+                                  checked
+                                    ? "border-primary bg-primary/5"
+                                    : "hover:bg-secondary"
                                 ].join(" ")}
                               >
-                                <div className="flex items-center gap-3">
-                                  <input
-                                    type="radio"
-                                    name="palette"
-                                    className="accent-primary"
-                                    checked={checked}
-                                    onChange={() => setPendingPaletteId(p.id)}
-                                  />
-                                  <div>
-                                    <div className="text-sm font-medium">{p.name}</div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                      {p.is_global ? "Global" : "Sua"}
-                                    </div>
+                                <div>
+                                  <div className="text-sm font-medium">{p.name}</div>
+                                  <div className="text-[11px] text-muted-foreground">
+                                    {p.is_global ? "Global" : "Sua"}
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-1">
                                   <div
-                                    className="h-5 w-5 rounded-md border"
+                                    className="h-6 w-6 rounded-lg border"
                                     style={{ background: p.palette.background }}
-                                    title="Background"
                                   />
                                   <div
-                                    className="h-5 w-5 rounded-md border"
+                                    className="h-6 w-6 rounded-lg border"
                                     style={{ background: p.palette.text }}
-                                    title="Text"
                                   />
                                   <div
-                                    className="h-5 w-5 rounded-md border"
+                                    className="h-6 w-6 rounded-lg border"
                                     style={{ background: p.palette.accent }}
-                                    title="Accent"
                                   />
                                 </div>
-                              </label>
+                              </button>
                             );
                           })}
                         </div>
-                        <button
-                          type="button"
-                          onClick={applyPalette}
-                          className="w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        >
-                          Aplicar paleta
-                        </button>
                         <div className="text-[11px] text-muted-foreground">
-                          No MVP, aplicamos: fundo do slide + cor do texto (título usa accent).
+                          Aplicação instantânea (sem “salvar”). No MVP: fundo + cores do texto.
                         </div>
                       </div>
                     )}
@@ -1313,57 +1496,85 @@ export default function StudioShell(props: Props) {
                 ) : null}
 
                 {showTemplates ? (
-                  <div className="rounded-2xl border bg-background px-4 py-3">
-                    <div className="text-base font-medium">Templates</div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      Escolha um template base para posicionamento dos textos e slots de imagem.
+                  <div className="space-y-3">
+                    <div className="text-sm font-semibold">Templates</div>
+                    <div className="text-xs text-muted-foreground">
+                      Template define zonas e <span className="font-medium">slots de imagem</span>. No MVP, mostramos placeholders; imagens entram na próxima fase.
                     </div>
-                    <div className="mt-3 space-y-2">
-                      {templateOptions.map((t) => {
-                        const checked = t.id === pendingTemplateId;
-                        return (
-                          <label
-                            key={t.id}
-                            className={[
-                              "flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 transition",
-                              checked ? "border-primary bg-primary/5" : "hover:bg-secondary"
-                            ].join(" ")}
-                          >
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="radio"
-                                name="template"
-                                className="accent-primary"
-                                checked={checked}
-                                onChange={() => setPendingTemplateId(t.id)}
-                              />
-                              <div>
-                                <div className="text-sm font-medium">{t.name}</div>
-                                <div className="text-[11px] text-muted-foreground font-mono">
-                                  {t.id}
-                                </div>
+
+                    <div className="max-h-[420px] overflow-auto pr-1">
+                      <div className="grid grid-cols-2 gap-3">
+                        {templateOptions.map((t) => {
+                          const checked = t.id === pendingTemplateId;
+                          const slot = t.images.find((img) => img.kind === "slot") ?? null;
+                          const isBuiltin = t.id.startsWith("builtin/");
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                setPendingTemplateId(t.id);
+                                applyTemplate(t); // apply immediately (PostNitro-style)
+                              }}
+                              className={[
+                                "group rounded-2xl border bg-background/70 p-2 text-left shadow-sm transition hover:bg-secondary",
+                                checked ? "border-primary ring-1 ring-primary/30" : ""
+                              ].join(" ")}
+                            >
+                              <div className="relative aspect-square overflow-hidden rounded-xl border bg-muted/40">
+                                {/* fake background */}
+                                <div className="absolute inset-0 bg-gradient-to-br from-muted/20 via-background to-muted/30" />
+
+                                {/* image slot */}
+                                {slot ? (
+                                  <div
+                                    className="absolute rounded-lg border border-dashed border-muted-foreground/50 bg-muted/20"
+                                    style={rectToPct(slot.bounds)}
+                                  />
+                                ) : null}
+
+                                {/* text zones */}
+                                <div
+                                  className="absolute rounded-md bg-foreground/10"
+                                  style={rectToPct(t.zones.title)}
+                                />
+                                {t.zones.body ? (
+                                  <div
+                                    className="absolute rounded-md bg-foreground/10"
+                                    style={rectToPct(t.zones.body)}
+                                  />
+                                ) : null}
+                                {t.zones.cta ? (
+                                  <div
+                                    className="absolute rounded-md bg-foreground/10"
+                                    style={rectToPct(t.zones.cta)}
+                                  />
+                                ) : null}
                               </div>
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                              {t.id.startsWith("builtin/") ? "Built-in" : "Custom"}
-                            </div>
-                          </label>
-                        );
-                      })}
+
+                              <div className="mt-2 flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="text-sm font-semibold leading-tight">
+                                    {t.name}
+                                  </div>
+                                  <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                    {isBuiltin ? "Built‑in" : "Custom"}
+                                  </div>
+                                </div>
+                                {checked ? (
+                                  <div className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                                    Ativo
+                                  </div>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const t = templateOptions.find((x) => x.id === pendingTemplateId);
-                        if (t) applyTemplate(t);
-                      }}
-                      className="mt-3 w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                    >
-                      Aplicar template
-                    </button>
-                    <div className="mt-2 text-[11px] text-muted-foreground">
-                      No MVP, aplicamos o layout apenas nos objetos com id{" "}
-                      <span className="font-mono">title/body/cta/tagline</span> e embutimos o snapshot do template no projeto.
+
+                    <div className="text-[11px] text-muted-foreground">
+                      No MVP: reposicionamos apenas <span className="font-mono">title/body/cta/tagline</span> e adicionamos placeholders de imagem no <span className="font-mono">editor_state</span>.
                     </div>
                   </div>
                 ) : null}
@@ -1500,6 +1711,18 @@ export default function StudioShell(props: Props) {
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}
                 />
+                {/* Image slot placeholders (template-driven) */}
+                {missingImageSlots.map((slot) => (
+                  <div
+                    key={slot.id}
+                    className="pointer-events-none absolute z-20"
+                    style={rectToPct(slot.bounds)}
+                  >
+                    <div className="flex h-full w-full items-center justify-center rounded-2xl border-2 border-dashed border-emerald-400/70 bg-emerald-50/10 text-[11px] font-medium text-emerald-700">
+                      Clique para adicionar imagem
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 

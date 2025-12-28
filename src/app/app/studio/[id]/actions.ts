@@ -5,6 +5,7 @@ import { isRedirectError } from "next/dist/client/components/redirect-error";
 import {
   applyNaturalLanguageEdit,
   cleanupPlaceholderGeneratedAssets,
+  createUserPalette,
   generateFirstDraft,
   saveCarouselElementLocksFromForm,
   saveCarouselEditorStateFromForm
@@ -64,6 +65,16 @@ export async function studioSaveEditorStateInline(input: {
   formData.set("carouselId", input.carouselId);
   formData.set("editorStateJson", input.editorStateJson);
   return await saveCarouselEditorStateFromForm(formData);
+}
+
+export async function studioCreatePalette(input: {
+  name: string;
+  paletteData: Record<string, unknown>;
+}) {
+  return await createUserPalette({
+    name: input.name,
+    paletteData: input.paletteData
+  });
 }
 
 export async function studioGenerate(formData: FormData) {
