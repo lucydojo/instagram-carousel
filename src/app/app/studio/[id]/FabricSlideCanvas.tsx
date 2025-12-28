@@ -121,26 +121,35 @@ export default function FabricSlideCanvas({
       // unwinding its internal "exit editing" flow and may call `canvas.fire`
       // on the textbox; removing it immediately can lead to
       // "Cannot read properties of undefined (reading 'fire')".
-      window.setTimeout(() => {
+      const tryDelete = () => {
         const liveCanvas = fabricRef.current;
         if (!liveCanvas) return;
+
+        // Wait until Fabric fully finishes editing teardown.
+        const isAnyEditing = liveCanvas
+          .getObjects()
+          .some((o) => Boolean((o as unknown as { isEditing?: unknown }).isEditing));
+        if (isAnyEditing) {
+          window.setTimeout(tryDelete, 50);
+          return;
+        }
 
         const liveObj = liveCanvas
           .getObjects()
           .find((o) => getObjectId(o as FabricObject) === id);
         if (!liveObj) return;
 
-        if (liveCanvas.getActiveObject() === liveObj) {
-          liveCanvas.discardActiveObject();
-        }
-
+        // Avoid discardActiveObject() here — it can trigger deselect flows
+        // that still expect the textbox to have a live `canvas` reference.
         liveCanvas.remove(liveObj);
         liveCanvas.requestRenderAll();
 
         const currentSlide = slideRef.current;
         const nextObjects = currentSlide.objects.filter((o) => o?.id !== id);
         emit({ ...currentSlide, objects: nextObjects });
-      }, 0);
+      };
+
+      window.setTimeout(tryDelete, 50);
     };
 
     const onModified = (e: { target?: FabricObject }) => {
