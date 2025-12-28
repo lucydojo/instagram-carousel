@@ -27,7 +27,10 @@ import {
   studioSaveLocks
 } from "./actions";
 import { MotionDock, MotionDockItem } from "./MotionDock";
-import FabricSlideCanvas, { type SlideV1 } from "./FabricSlideCanvas";
+import FabricSlideCanvas, {
+  type FabricSlideCanvasHandle,
+  type SlideV1
+} from "./FabricSlideCanvas";
 
 type Asset = {
   id: string;
@@ -112,6 +115,7 @@ type DockItem =
 export default function StudioShell(props: Props) {
   const router = useRouter();
   const [isPending, startTransition] = React.useTransition();
+  const canvasApiRef = React.useRef<FabricSlideCanvasHandle | null>(null);
   const [selectedSlideIndex, setSelectedSlideIndex] = React.useState(() =>
     clampInt(props.initialSlideIndex, 1, Math.max(1, props.slideCount))
   );
@@ -148,6 +152,54 @@ export default function StudioShell(props: Props) {
         setLeftOpen(false);
       }
     };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  React.useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        active &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable)
+      ) {
+        return;
+      }
+
+      const api = canvasApiRef.current;
+      if (!api) return;
+
+      const isMeta = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+
+      // Add text
+      if (!isMeta && key === "t") {
+        if (api.addText()) e.preventDefault();
+        return;
+      }
+
+      // Delete selected object(s)
+      if (!isMeta && (e.key === "Backspace" || e.key === "Delete")) {
+        if (api.deleteSelection()) e.preventDefault();
+        return;
+      }
+
+      // Copy / Paste / Duplicate
+      if (isMeta && key === "c") {
+        if (api.copySelection()) e.preventDefault();
+        return;
+      }
+      if (isMeta && key === "v") {
+        if (api.paste()) e.preventDefault();
+        return;
+      }
+      if (isMeta && key === "d") {
+        if (api.duplicateSelection()) e.preventDefault();
+      }
+    };
+
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
@@ -843,8 +895,23 @@ export default function StudioShell(props: Props) {
                 {showText ? (
                   <div className="rounded-2xl border bg-background px-4 py-3">
                     <div className="text-base font-medium">Texto</div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      Tipografia global/per-slide entra nas próximas tasks. Por enquanto, o preview valida o pipeline.
+                    <div className="mt-2 space-y-3 text-xs text-muted-foreground">
+                      <div>
+                        Tipografia global/per-slide entra nas próximas tasks. Por enquanto, você pode inserir e editar caixas de texto no canvas.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => canvasApiRef.current?.addText()}
+                        className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary"
+                      >
+                        Adicionar texto <span className="font-mono text-xs text-muted-foreground">(T)</span>
+                      </button>
+                      <div className="text-[11px] text-muted-foreground">
+                        Atalhos: <span className="font-mono">Del/Backspace</span> (remover),{" "}
+                        <span className="font-mono">⌘/Ctrl+C</span>,{" "}
+                        <span className="font-mono">⌘/Ctrl+V</span>,{" "}
+                        <span className="font-mono">⌘/Ctrl+D</span>.
+                      </div>
                     </div>
                   </div>
                 ) : null}
@@ -978,6 +1045,7 @@ export default function StudioShell(props: Props) {
                   Canvas (MVP)
                 </div>
                 <FabricSlideCanvas
+                  ref={canvasApiRef}
                   slide={canvasSlide}
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}

@@ -25,6 +25,14 @@ export type SlideV1 = {
   background?: { color?: string } | null;
 };
 
+export type FabricSlideCanvasHandle = {
+  addText: () => boolean;
+  deleteSelection: () => boolean;
+  duplicateSelection: () => boolean;
+  copySelection: () => boolean;
+  paste: () => boolean;
+};
+
 function clampNumber(value: unknown, fallback: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return value;
@@ -39,6 +47,35 @@ function setObjectId(obj: FabricObject, id: string) {
   (obj as unknown as { dojogramId?: string }).dojogramId = id;
 }
 
+function createId(prefix = "obj") {
+  const rand =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  return `${prefix}_${rand}`;
+}
+
+function getActiveIds(canvas: Canvas): string[] {
+  const active = canvas.getActiveObject() as unknown as
+    | (FabricObject & { type?: string; getObjects?: () => FabricObject[] })
+    | null;
+  if (!active) return [];
+  if (active.type === "activeSelection" && typeof active.getObjects === "function") {
+    return active
+      .getObjects()
+      .map((o) => getObjectId(o))
+      .filter((v): v is string => typeof v === "string");
+  }
+  const id = getObjectId(active);
+  return id ? [id] : [];
+}
+
+function isAnyEditing(canvas: Canvas) {
+  return canvas
+    .getObjects()
+    .some((o) => Boolean((o as unknown as { isEditing?: unknown }).isEditing));
+}
+
 type Props = {
   slide: SlideV1;
   className?: string;
@@ -46,12 +83,8 @@ type Props = {
   onSlideChange: (next: SlideV1) => void;
 };
 
-export default function FabricSlideCanvas({
-  slide,
-  className,
-  renderKey,
-  onSlideChange
-}: Props) {
+const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
+  function FabricSlideCanvas({ slide, className, renderKey, onSlideChange }, ref) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasElRef = React.useRef<HTMLCanvasElement>(null);
   const fabricRef = React.useRef<Canvas | null>(null);
@@ -59,6 +92,9 @@ export default function FabricSlideCanvas({
   const emitTimerRef = React.useRef<number | null>(null);
   const nextSlideRef = React.useRef<SlideV1 | null>(null);
   const slideRef = React.useRef(slide);
+  const clipboardRef = React.useRef<{ objects: SlideObjectV1[]; pasteN: number } | null>(
+    null
+  );
 
   const emit = React.useCallback(
     (next: SlideV1) => {
@@ -80,6 +116,178 @@ export default function FabricSlideCanvas({
   React.useEffect(() => {
     slideRef.current = slide;
   }, [slide]);
+
+  const addText = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return false;
+    if (isAnyEditing(canvas)) return false;
+
+    const id = createId("text");
+    const slideW = clampNumber(slideRef.current.width, 1080);
+    const slideH = clampNumber(slideRef.current.height, 1080);
+    const x = Math.round(slideW * 0.12);
+    const y = Math.round(slideH * 0.18);
+    const width = Math.max(240, Math.round(slideW * 0.55));
+
+    const textbox = new Textbox("Novo texto", {
+      left: x,
+      top: y,
+      width,
+      originX: "left",
+      originY: "top",
+      fontFamily:
+        "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+      fontSize: 48,
+      fontWeight: 600,
+      fill: "#111827",
+      textAlign: "left",
+      editable: true
+    });
+    textbox.initDimensions();
+    setObjectId(textbox, id);
+    canvas.add(textbox);
+    canvas.setActiveObject(textbox);
+    canvas.requestRenderAll();
+
+    window.setTimeout(() => {
+      textbox.enterEditing();
+      textbox.selectAll();
+      canvas.requestRenderAll();
+    }, 0);
+
+    const currentSlide = slideRef.current;
+    const nextObj: SlideObjectV1 = {
+      id,
+      type: "text",
+      x,
+      y,
+      width,
+      height:
+        typeof textbox.height === "number" ? Math.round(textbox.height) : undefined,
+      text: textbox.text ?? "",
+      fontSize: 48,
+      fontWeight: 600,
+      fill: "#111827",
+      textAlign: "left"
+    };
+    emit({ ...currentSlide, objects: [...(currentSlide.objects ?? []), nextObj] });
+    return true;
+  }, [emit]);
+
+  const deleteSelection = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return false;
+    if (isAnyEditing(canvas)) return false;
+    const ids = getActiveIds(canvas);
+    if (ids.length === 0) return false;
+
+    for (const o of canvas.getObjects()) {
+      const oid = getObjectId(o as FabricObject);
+      if (oid && ids.includes(oid)) canvas.remove(o);
+    }
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+
+    const currentSlide = slideRef.current;
+    const nextObjects = (currentSlide.objects ?? []).filter((o) => !ids.includes(o?.id ?? ""));
+    emit({ ...currentSlide, objects: nextObjects });
+    return true;
+  }, [emit]);
+
+  const copySelection = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return false;
+    if (isAnyEditing(canvas)) return false;
+    const ids = getActiveIds(canvas);
+    if (ids.length === 0) return false;
+
+    const currentSlide = slideRef.current;
+    const selected = (currentSlide.objects ?? []).filter((o) => o?.id && ids.includes(o.id));
+    if (selected.length === 0) return false;
+    clipboardRef.current = { objects: selected.map((o) => ({ ...o })), pasteN: 0 };
+    return true;
+  }, []);
+
+  const paste = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return false;
+    if (isAnyEditing(canvas)) return false;
+
+    const clip = clipboardRef.current;
+    if (!clip || clip.objects.length === 0) return false;
+    clip.pasteN += 1;
+    const dx = 24 * clip.pasteN;
+    const dy = 24 * clip.pasteN;
+
+    const currentSlide = slideRef.current;
+    const nextObjects = [...(currentSlide.objects ?? [])];
+
+    for (const o of clip.objects) {
+      if (o.type !== "text") continue;
+      const id = createId("text");
+      const text = o.text ?? "";
+      const x = clampNumber(o.x, 80) + dx;
+      const y = clampNumber(o.y, 240) + dy;
+      const width = clampNumber(o.width, 560);
+
+      const textbox = new Textbox(text, {
+        left: x,
+        top: y,
+        width,
+        originX: "left",
+        originY: "top",
+        fontFamily:
+          "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        fontSize: clampNumber(o.fontSize, 48),
+        fontWeight: clampNumber(o.fontWeight, 600),
+        fill: o.fill ?? "#111827",
+        textAlign: o.textAlign ?? "left",
+        editable: true
+      });
+      textbox.initDimensions();
+      setObjectId(textbox, id);
+      canvas.add(textbox);
+
+      nextObjects.push({
+        ...o,
+        id,
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(width),
+        height: typeof textbox.height === "number" ? Math.round(textbox.height) : o.height
+      });
+    }
+
+    const lastId = nextObjects.length > 0 ? nextObjects[nextObjects.length - 1]?.id : null;
+    if (lastId) {
+      const lastCanvasObj = canvas
+        .getObjects()
+        .find((o) => getObjectId(o as FabricObject) === lastId);
+      if (lastCanvasObj) canvas.setActiveObject(lastCanvasObj);
+    }
+    canvas.requestRenderAll();
+
+    emit({ ...currentSlide, objects: nextObjects });
+    return true;
+  }, [emit]);
+
+  const duplicateSelection = React.useCallback(() => {
+    const didCopy = copySelection();
+    if (!didCopy) return false;
+    return paste();
+  }, [copySelection, paste]);
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      addText,
+      deleteSelection,
+      duplicateSelection,
+      copySelection,
+      paste
+    }),
+    [addText, copySelection, deleteSelection, duplicateSelection, paste]
+  );
 
   React.useEffect(() => {
     const el = canvasElRef.current;
@@ -126,10 +334,7 @@ export default function FabricSlideCanvas({
         if (!liveCanvas) return;
 
         // Wait until Fabric fully finishes editing teardown.
-        const isAnyEditing = liveCanvas
-          .getObjects()
-          .some((o) => Boolean((o as unknown as { isEditing?: unknown }).isEditing));
-        if (isAnyEditing) {
+        if (isAnyEditing(liveCanvas)) {
           window.setTimeout(tryDelete, 50);
           return;
         }
@@ -349,4 +554,9 @@ export default function FabricSlideCanvas({
       <canvas ref={canvasElRef} className="h-full w-full" />
     </div>
   );
-}
+  }
+);
+
+FabricSlideCanvas.displayName = "FabricSlideCanvas";
+
+export default FabricSlideCanvas;
