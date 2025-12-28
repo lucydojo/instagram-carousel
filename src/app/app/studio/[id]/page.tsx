@@ -95,7 +95,7 @@ export default async function StudioPage({
         const { signedUrl } = await createSignedUrl({
           bucket: asset.storage_bucket,
           path: asset.storage_path,
-          expiresIn: 60 * 10
+          expiresIn: 60 * 60 * 6
         });
         return { id: asset.id, asset_type: asset.asset_type, signedUrl };
       })
@@ -132,6 +132,14 @@ export default async function StudioPage({
       statusLabel={statusLabel}
       progress={{ imagesDone, imagesTotal, imagesFailed }}
       assets={{ generated: signedGeneratedAssets, reference: signedReferenceAssets }}
+      catalog={{
+        templates: projectData.templates.length,
+        presets: projectData.presets.length,
+        palettes: projectData.palettes.length,
+        tones: projectData.tones.length,
+        audiences: projectData.audiences.length,
+        creators: projectData.creatorProfiles.length
+      }}
       flash={{
         saved,
         locksSaved,

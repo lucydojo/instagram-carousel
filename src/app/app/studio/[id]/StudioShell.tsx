@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Bookmark,
   ChevronLeft,
-  ChevronRight,
+  Code2,
   Image as ImageIcon,
+  LayoutTemplate,
   LayoutGrid,
+  Lock,
   Palette,
-  Settings2,
   Sparkles,
   Type,
   UserCircle2
@@ -92,6 +94,14 @@ type Props = {
     generated: Asset[];
     reference: Asset[];
   };
+  catalog: {
+    templates: number;
+    presets: number;
+    palettes: number;
+    tones: number;
+    audiences: number;
+    creators: number;
+  };
   flash: Flash;
   imageModels: string[];
   defaults: {
@@ -107,7 +117,11 @@ type DockItem =
   | "assets"
   | "brand"
   | "colors"
-  | "text";
+  | "text"
+  | "templates"
+  | "presets"
+  | "locks"
+  | "json";
 
 function DockButton({
   active,
@@ -125,13 +139,18 @@ function DockButton({
       type="button"
       onClick={onClick}
       className={[
-        "flex h-10 w-10 items-center justify-center rounded-xl transition",
-        active ? "bg-primary text-primary-foreground" : "hover:bg-secondary"
+        "group relative flex h-10 w-10 items-center justify-center rounded-xl transition",
+        active
+          ? "bg-primary text-primary-foreground"
+          : "text-neutral-300 hover:bg-white/10 hover:text-white"
       ].join(" ")}
       aria-label={label}
       title={label}
     >
-      {icon}
+      <span className="transition-transform group-hover:translate-x-1">{icon}</span>
+      <span className="pointer-events-none absolute left-full top-1/2 ml-3 hidden -translate-y-1/2 whitespace-nowrap rounded-lg border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm opacity-0 transition group-hover:opacity-100 md:block">
+        {label}
+      </span>
     </button>
   );
 }
@@ -142,10 +161,6 @@ export default function StudioShell(props: Props) {
     clampInt(props.initialSlideIndex, 1, Math.max(1, props.slideCount))
   );
   const [leftOpen, setLeftOpen] = React.useState(false);
-  const [rightOpen, setRightOpen] = React.useState(false);
-  const [rightMode, setRightMode] = React.useState<"controls" | "advanced">(
-    "controls"
-  );
   const [assetsTab, setAssetsTab] = React.useState<"generated" | "reference">(
     "generated"
   );
@@ -161,7 +176,6 @@ export default function StudioShell(props: Props) {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setLeftOpen(false);
-        setRightOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -205,10 +219,17 @@ export default function StudioShell(props: Props) {
   const showBrand = activeDock === "brand";
   const showColors = activeDock === "colors";
   const showText = activeDock === "text";
+  const showTemplates = activeDock === "templates";
+  const showPresets = activeDock === "presets";
+  const showLocks = activeDock === "locks";
+  const showJson = activeDock === "json";
 
   const generateAction = studioGenerate;
   const editAction = studioEdit;
   const saveLocksAction = studioSaveLocks;
+  const saveEditorStateAction = studioSaveEditorState;
+
+  const leftShiftPx = leftOpen ? 220 : 0;
 
   return (
     <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-screen w-screen overflow-x-hidden bg-muted/30">
@@ -287,8 +308,8 @@ export default function StudioShell(props: Props) {
 
         <main className="relative mt-6">
           {/* Floating dock */}
-          <div className="fixed left-5 top-28 z-40 hidden md:block">
-            <div className="flex flex-col gap-2 rounded-2xl border bg-background/80 p-2 shadow-sm backdrop-blur">
+          <div className="fixed left-5 top-1/2 z-40 hidden -translate-y-1/2 md:block">
+            <div className="flex flex-col gap-2 rounded-2xl border border-neutral-800 bg-neutral-900/90 p-2 shadow-sm backdrop-blur">
               <DockButton
                 active={false}
                 icon={<ArrowLeft className="h-5 w-5" />}
@@ -320,6 +341,18 @@ export default function StudioShell(props: Props) {
                 onClick={() => toggleLeft("assets")}
               />
               <DockButton
+                active={leftOpen && activeDock === "templates"}
+                icon={<LayoutTemplate className="h-5 w-5" />}
+                label="Templates"
+                onClick={() => toggleLeft("templates")}
+              />
+              <DockButton
+                active={leftOpen && activeDock === "presets"}
+                icon={<Bookmark className="h-5 w-5" />}
+                label="Presets"
+                onClick={() => toggleLeft("presets")}
+              />
+              <DockButton
                 active={leftOpen && activeDock === "brand"}
                 icon={<UserCircle2 className="h-5 w-5" />}
                 label="Brand"
@@ -337,33 +370,54 @@ export default function StudioShell(props: Props) {
                 label="Texto"
                 onClick={() => toggleLeft("text")}
               />
+              <div className="my-1 h-px bg-border" />
+              <DockButton
+                active={leftOpen && activeDock === "locks"}
+                icon={<Lock className="h-5 w-5" />}
+                label="Locks"
+                onClick={() => toggleLeft("locks")}
+              />
+              <DockButton
+                active={leftOpen && activeDock === "json"}
+                icon={<Code2 className="h-5 w-5" />}
+                label="Editor state"
+                onClick={() => toggleLeft("json")}
+              />
             </div>
           </div>
 
           {/* Left panel */}
           <aside
             className={[
-              "fixed bottom-4 left-20 top-24 z-30 hidden w-[360px] md:block",
+              "fixed left-24 top-1/2 z-30 hidden w-[380px] -translate-y-1/2 md:block",
               "transition-transform duration-200 ease-out",
               leftOpen ? "translate-x-0" : "-translate-x-[120%]"
             ].join(" ")}
             aria-hidden={!leftOpen}
           >
-            <div className="flex h-full flex-col overflow-hidden rounded-3xl border bg-background/90 shadow-lg backdrop-blur">
+            <div className="max-h-[calc(100vh-9rem)] overflow-hidden rounded-3xl border bg-background/90 shadow-lg backdrop-blur">
               <div className="flex items-center justify-between border-b px-4 py-3">
-                <div className="text-sm font-semibold">
+                <div className="text-base font-semibold">
                   {activeDock === "generate"
                     ? "Geração"
                     : activeDock === "command"
                       ? "Edição por comando"
                       : activeDock === "assets"
                         ? "Assets"
+                        : activeDock === "templates"
+                          ? "Templates"
+                          : activeDock === "presets"
+                            ? "Presets"
                         : activeDock === "brand"
                           ? "Branding"
-                          : activeDock === "colors"
-                            ? "Cores"
-                            : activeDock === "text"
-                              ? "Texto"
+                        : activeDock === "colors"
+                          ? "Cores"
+                        : activeDock === "text"
+                          ? "Texto"
+                          : activeDock === "locks"
+                            ? "Locks"
+                            : activeDock === "json"
+                              ? "Editor state"
                               : "Studio"}
                 </div>
                 <button
@@ -376,12 +430,12 @@ export default function StudioShell(props: Props) {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-auto p-4">
+              <div className="max-h-[calc(100vh-13rem)] overflow-auto p-4">
                 {showGenerate ? (
                   <div className="space-y-6">
                     <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
                       <div className="flex items-center justify-between">
-                        <div className="text-sm font-medium">Geração (IA)</div>
+                        <div className="text-base font-medium">Geração (IA)</div>
                         <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                           {props.statusLabel}
                         </span>
@@ -470,7 +524,7 @@ export default function StudioShell(props: Props) {
 
                     <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
                       <div className="flex items-center justify-between">
-                        <div className="text-sm font-medium">Edição por comando</div>
+                        <div className="text-base font-medium">Edição por comando</div>
                         <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                           IA
                         </span>
@@ -630,7 +684,7 @@ export default function StudioShell(props: Props) {
 
                 {showBrand ? (
                   <div className="rounded-2xl border bg-background px-4 py-3">
-                    <div className="text-sm font-medium">Branding</div>
+                    <div className="text-base font-medium">Branding</div>
                     <div className="mt-2 text-xs text-muted-foreground">
                       No MVP, branding é “personal” (avatar + @). A UI completa entra nas próximas tasks.
                     </div>
@@ -639,7 +693,7 @@ export default function StudioShell(props: Props) {
 
                 {showColors ? (
                   <div className="rounded-2xl border bg-background px-4 py-3">
-                    <div className="text-sm font-medium">Cores</div>
+                    <div className="text-base font-medium">Cores</div>
                     <div className="mt-2 text-xs text-muted-foreground">
                       Paletas globais/custom já existem no backend. A UI completa entra nas próximas tasks.
                     </div>
@@ -648,108 +702,69 @@ export default function StudioShell(props: Props) {
 
                 {showText ? (
                   <div className="rounded-2xl border bg-background px-4 py-3">
-                    <div className="text-sm font-medium">Texto</div>
+                    <div className="text-base font-medium">Texto</div>
                     <div className="mt-2 text-xs text-muted-foreground">
                       Tipografia global/per-slide entra nas próximas tasks. Por enquanto, o preview valida o pipeline.
                     </div>
                   </div>
                 ) : null}
-              </div>
-            </div>
-          </aside>
 
-          {/* Right handle */}
-          <button
-            type="button"
-            onClick={() => setRightOpen((v) => !v)}
-            className="fixed right-5 top-1/2 z-40 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border bg-background/80 shadow-sm backdrop-blur hover:bg-secondary md:flex"
-            aria-label={rightOpen ? "Fechar propriedades" : "Abrir propriedades"}
-          >
-            <Settings2 className="h-4 w-4 text-muted-foreground" />
-            {rightOpen ? (
-              <ChevronRight className="absolute right-1.5 h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronLeft className="absolute left-1.5 h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
-
-          {/* Right panel */}
-          <aside
-            className={[
-              "fixed bottom-4 right-4 top-40 z-30 hidden w-[360px] md:block",
-              "transition-transform duration-200 ease-out",
-              rightOpen ? "translate-x-0" : "translate-x-[120%]"
-            ].join(" ")}
-            aria-hidden={!rightOpen}
-          >
-            <div className="flex h-full flex-col overflow-hidden rounded-3xl border bg-background/90 shadow-lg backdrop-blur">
-              <div className="flex items-center justify-between border-b px-4 py-3">
-                <div className="text-sm font-semibold">Propriedades</div>
-                <div className="flex overflow-hidden rounded-xl border bg-background">
-                  <button
-                    type="button"
-                    onClick={() => setRightMode("controls")}
-                    className={[
-                      "px-3 py-2 text-sm",
-                      rightMode === "controls"
-                        ? "bg-foreground text-background"
-                        : "hover:bg-secondary"
-                    ].join(" ")}
-                  >
-                    Controles
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRightMode("advanced")}
-                    className={[
-                      "px-3 py-2 text-sm",
-                      rightMode === "advanced"
-                        ? "bg-foreground text-background"
-                        : "hover:bg-secondary"
-                    ].join(" ")}
-                  >
-                    Avançado
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-auto p-4">
-                <section className="space-y-2 rounded-2xl border bg-background px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-medium">Locks</div>
-                    <span className="text-xs text-muted-foreground">proteção</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Formato: <span className="font-mono">{`{"slide_1":{"title":true}}`}</span>
-                  </div>
-                  <form action={saveLocksAction} className="space-y-2">
-                    <input type="hidden" name="carouselId" value={props.carouselId} />
-                    <input
-                      type="hidden"
-                      name="currentSlide"
-                      value={selectedSlideIndex}
-                    />
-                    <textarea
-                      name="elementLocksJson"
-                      className="h-36 w-full rounded-xl border bg-background p-3 font-mono text-xs"
-                      defaultValue={props.defaults.elementLocksJson}
-                    />
-                    <button
-                      className="w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                      type="submit"
-                    >
-                      Salvar locks
-                    </button>
-                  </form>
-                </section>
-
-                {rightMode === "advanced" ? (
-                  <section className="mt-4 space-y-2 rounded-2xl border bg-background px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium">Editor State (JSON)</div>
-                      <span className="text-xs text-muted-foreground">avançado</span>
+                {showTemplates ? (
+                  <div className="rounded-2xl border bg-background px-4 py-3">
+                    <div className="text-base font-medium">Templates</div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Templates disponíveis:{" "}
+                      <span className="font-mono">{props.catalog.templates}</span>. UI de seleção entra nas próximas tasks.
                     </div>
-                    <form action={studioSaveEditorState} className="space-y-2">
+                  </div>
+                ) : null}
+
+                {showPresets ? (
+                  <div className="rounded-2xl border bg-background px-4 py-3">
+                    <div className="text-base font-medium">Presets</div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Presets salvos:{" "}
+                      <span className="font-mono">{props.catalog.presets}</span>. UI de gestão entra nas próximas tasks.
+                    </div>
+                  </div>
+                ) : null}
+
+                {showLocks ? (
+                  <div className="space-y-3 rounded-2xl border bg-background px-4 py-3">
+                    <div className="text-base font-medium">Locks</div>
+                    <div className="text-xs text-muted-foreground">
+                      Locks protegem elementos contra alterações automáticas da IA. Formato:{" "}
+                      <span className="font-mono">{`{"slide_1":{"title":true}}`}</span>
+                    </div>
+                    <form action={saveLocksAction} className="space-y-2">
+                      <input type="hidden" name="carouselId" value={props.carouselId} />
+                      <input
+                        type="hidden"
+                        name="currentSlide"
+                        value={selectedSlideIndex}
+                      />
+                      <textarea
+                        name="elementLocksJson"
+                        className="h-36 w-full rounded-xl border bg-background p-3 font-mono text-xs"
+                        defaultValue={props.defaults.elementLocksJson}
+                      />
+                      <button
+                        className="w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        type="submit"
+                      >
+                        Salvar locks
+                      </button>
+                    </form>
+                  </div>
+                ) : null}
+
+                {showJson ? (
+                  <div className="space-y-3 rounded-2xl border bg-background px-4 py-3">
+                    <div className="text-base font-medium">Editor state (JSON)</div>
+                    <div className="text-xs text-muted-foreground">
+                      Avançado/debug. Use apenas se precisar inspecionar/ajustar manualmente.
+                    </div>
+                    <form action={saveEditorStateAction} className="space-y-2">
                       <input type="hidden" name="carouselId" value={props.carouselId} />
                       <input
                         type="hidden"
@@ -768,7 +783,7 @@ export default function StudioShell(props: Props) {
                         Salvar editor_state
                       </button>
                     </form>
-                  </section>
+                  </div>
                 ) : null}
               </div>
             </div>
@@ -792,7 +807,10 @@ export default function StudioShell(props: Props) {
               </button>
             </div>
 
-            <div className="relative mt-5 flex items-center justify-center">
+            <div
+              className="relative mt-5 flex items-center justify-center transition-transform duration-200 ease-out"
+              style={{ transform: `translateX(${leftShiftPx}px)` }}
+            >
               <div className="relative aspect-square w-full max-w-[720px] rounded-[28px] bg-background p-10 shadow-[0_30px_120px_rgba(0,0,0,0.14)]">
                 <div className="text-xs text-muted-foreground">Preview (placeholder)</div>
                 <div className="mt-6 text-5xl font-semibold tracking-tight">
@@ -808,38 +826,41 @@ export default function StudioShell(props: Props) {
                   </div>
                 )}
 
-                {/* Slide navigator (floating) */}
-                {props.slideCount > 0 ? (
-                  <div className="absolute bottom-5 left-1/2 -translate-x-1/2">
-                    <div className="flex gap-2 rounded-2xl border bg-background/80 p-2 shadow-sm backdrop-blur">
-                      {Array.from({ length: props.slideCount }, (_, i) => {
-                        const idx = i + 1;
-                        const isActive = idx === selectedSlideIndex;
-                        return (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() => setSelectedSlideIndex(idx)}
-                            className={[
-                              "flex h-9 w-9 items-center justify-center rounded-xl text-sm font-medium transition",
-                              isActive
-                                ? "bg-primary text-primary-foreground"
-                                : "hover:bg-secondary"
-                            ].join(" ")}
-                            aria-current={isActive ? "page" : undefined}
-                          >
-                            {idx}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null}
               </div>
             </div>
 
+            {props.slideCount > 0 ? (
+              <div
+                className="mt-6 flex justify-center transition-transform duration-200 ease-out"
+                style={{ transform: `translateX(${leftShiftPx}px)` }}
+              >
+                <div className="flex gap-2 rounded-2xl border bg-background/80 p-2 shadow-sm backdrop-blur">
+                  {Array.from({ length: props.slideCount }, (_, i) => {
+                    const idx = i + 1;
+                    const isActive = idx === selectedSlideIndex;
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setSelectedSlideIndex(idx)}
+                        className={[
+                          "flex h-9 w-9 items-center justify-center rounded-xl text-sm font-medium transition",
+                          isActive
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-secondary"
+                        ].join(" ")}
+                        aria-current={isActive ? "page" : undefined}
+                      >
+                        {idx}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             {/* Subtle hints */}
-            <div className="mt-6 text-center text-xs text-muted-foreground">
+            <div className="mt-4 text-center text-xs text-muted-foreground">
               Dica: pressione <span className="font-mono">Esc</span> para fechar painéis.
             </div>
           </section>
