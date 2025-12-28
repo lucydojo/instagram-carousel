@@ -117,14 +117,30 @@ export default function FabricSlideCanvas({
       // textbox, auto-delete the object.
       if (text.trim().length > 0) return;
 
-      const currentSlide = slideRef.current;
-      const nextObjects = currentSlide.objects.filter((o) => o?.id !== id);
+      // Important: don't remove the object synchronously. Fabric is still
+      // unwinding its internal "exit editing" flow and may call `canvas.fire`
+      // on the textbox; removing it immediately can lead to
+      // "Cannot read properties of undefined (reading 'fire')".
+      window.setTimeout(() => {
+        const liveCanvas = fabricRef.current;
+        if (!liveCanvas) return;
 
-      canvas.remove(target);
-      canvas.discardActiveObject();
-      canvas.requestRenderAll();
+        const liveObj = liveCanvas
+          .getObjects()
+          .find((o) => getObjectId(o as FabricObject) === id);
+        if (!liveObj) return;
 
-      emit({ ...currentSlide, objects: nextObjects });
+        if (liveCanvas.getActiveObject() === liveObj) {
+          liveCanvas.discardActiveObject();
+        }
+
+        liveCanvas.remove(liveObj);
+        liveCanvas.requestRenderAll();
+
+        const currentSlide = slideRef.current;
+        const nextObjects = currentSlide.objects.filter((o) => o?.id !== id);
+        emit({ ...currentSlide, objects: nextObjects });
+      }, 0);
     };
 
     const onModified = (e: { target?: FabricObject }) => {
