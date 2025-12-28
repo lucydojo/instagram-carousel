@@ -28,6 +28,7 @@ function useDock() {
 
 const DEFAULT_SPRING: SpringOptions = { mass: 0.12, stiffness: 180, damping: 14 };
 const DEFAULT_PANEL_WIDTH = 52;
+const MIN_ITEM_SIZE = 40;
 
 export function MotionDock({
   children,
@@ -45,41 +46,26 @@ export function MotionDock({
   panelWidth?: number;
 }) {
   const mouseY = useMotionValue(Infinity);
-  const isHovered = useMotionValue(0);
-
-  const maxWidth = React.useMemo(() => {
-    return Math.max(panelWidth, magnification + magnification / 2 + 4);
-  }, [magnification, panelWidth]);
-
-  const widthRow = useTransform(isHovered, [0, 1], [panelWidth, maxWidth]);
-  const width = useSpring(widthRow, spring);
 
   return (
     <motion.div
-      style={{ width }}
+      style={{ width: panelWidth }}
       onMouseMove={({ clientY }) => {
-        isHovered.set(1);
         mouseY.set(clientY);
       }}
       onMouseLeave={() => {
-        isHovered.set(0);
         mouseY.set(Infinity);
       }}
-      className="flex items-center justify-center overflow-visible"
+      className={[
+        "flex w-fit flex-col items-center gap-2 overflow-visible rounded-2xl border border-border bg-white p-2 shadow-md",
+        className ?? ""
+      ].join(" ")}
       role="toolbar"
       aria-label="Dock"
     >
-      <motion.div
-        style={{ width: panelWidth }}
-        className={[
-          "flex w-fit flex-col items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-md",
-          className ?? ""
-        ].join(" ")}
-      >
-        <DockContext.Provider value={{ mouseY, spring, magnification, distance }}>
-          {children}
-        </DockContext.Provider>
-      </motion.div>
+      <DockContext.Provider value={{ mouseY, spring, magnification, distance }}>
+        {children}
+      </DockContext.Provider>
     </motion.div>
   );
 }
@@ -107,17 +93,18 @@ export function MotionDockItem({
   const sizeTransform = useTransform(
     mouseDistance,
     [-distance, 0, distance],
-    [40, magnification, 40]
+    [MIN_ITEM_SIZE, magnification, MIN_ITEM_SIZE]
   );
 
   const size = useSpring(sizeTransform, spring);
   const iconSize = useTransform(size, (v) => v / 2);
+  const xOffset = useTransform(size, (v) => (v - MIN_ITEM_SIZE) / 2);
 
   return (
     <motion.button
       ref={ref}
       type="button"
-      style={{ width: size, height: size }}
+      style={{ width: size, height: size, x: xOffset }}
       onClick={onClick}
       onHoverStart={() => setIsVisible(true)}
       onHoverEnd={() => setIsVisible(false)}
