@@ -26,6 +26,7 @@ import {
   studioSaveLocks
 } from "./actions";
 import { MotionDock, MotionDockItem } from "./MotionDock";
+import FabricSlideCanvas, { type SlideV1 } from "./FabricSlideCanvas";
 
 type Asset = {
   id: string;
@@ -42,30 +43,12 @@ function clampInt(value: number, min: number, max: number) {
   return v;
 }
 
-function getSlideTitle(slide: SlideLike | null, fallbackIndex: number): string {
-  if (!slide) return `Slide ${fallbackIndex}`;
-  const objects = Array.isArray(slide.objects) ? (slide.objects as unknown[]) : [];
-  const title = objects.find((o) => {
-    if (!o || typeof o !== "object") return false;
-    const r = o as Record<string, unknown>;
-    return r.type === "text" && (r.id === "title" || r.id === "headline");
-  }) as Record<string, unknown> | undefined;
-  const text = title?.text;
-  if (typeof text === "string" && text.trim().length > 0) return text.trim();
-  return `Slide ${fallbackIndex}`;
-}
-
-function getSlideBody(slide: SlideLike | null): string | null {
-  if (!slide) return null;
-  const objects = Array.isArray(slide.objects) ? (slide.objects as unknown[]) : [];
-  const body = objects.find((o) => {
-    if (!o || typeof o !== "object") return false;
-    const r = o as Record<string, unknown>;
-    return r.type === "text" && (r.id === "body" || r.id === "paragraph");
-  }) as Record<string, unknown> | undefined;
-  const text = body?.text;
-  if (typeof text === "string" && text.trim().length > 0) return text.trim();
-  return null;
+function safeParseJson<T>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 }
 
 type Flash = {
@@ -130,13 +113,22 @@ export default function StudioShell(props: Props) {
   const [selectedSlideIndex, setSelectedSlideIndex] = React.useState(() =>
     clampInt(props.initialSlideIndex, 1, Math.max(1, props.slideCount))
   );
+  const [dirty, setDirty] = React.useState(false);
   const [leftOpen, setLeftOpen] = React.useState(false);
   const [assetsTab, setAssetsTab] = React.useState<"generated" | "reference">(
     "generated"
   );
   const [activeDock, setActiveDock] = React.useState<DockItem>("generate");
+  const [editorState, setEditorState] = React.useState<Record<string, unknown>>(
+    () =>
+      safeParseJson<Record<string, unknown>>(props.defaults.editorStateJson) ?? {
+        version: 1,
+        slides: props.slides
+      }
+  );
 
   React.useEffect(() => {
+    setDirty(false);
     setSelectedSlideIndex((current) =>
       clampInt(current, 1, Math.max(1, props.slideCount))
     );
@@ -152,8 +144,15 @@ export default function StudioShell(props: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const slidesFromState = Array.isArray(editorState.slides)
+    ? (editorState.slides as SlideLike[])
+    : props.slides;
   const selectedSlide =
-    props.slideCount > 0 ? props.slides[selectedSlideIndex - 1] : null;
+    slidesFromState.length > 0 ? slidesFromState[selectedSlideIndex - 1] : null;
+  const editorStateJson = React.useMemo(
+    () => JSON.stringify(editorState, null, 2),
+    [editorState]
+  );
 
   const imagesTotal = props.progress.imagesTotal;
   const imagesDone = props.progress.imagesDone;
@@ -200,6 +199,45 @@ export default function StudioShell(props: Props) {
   const saveEditorStateAction = studioSaveEditorState;
 
   const leftShiftPx = leftOpen ? 220 : 0;
+
+  const canvasSlide: SlideV1 = React.useMemo(() => {
+    const s = selectedSlide;
+    if (!s || typeof s !== "object") return { width: 1080, height: 1080, objects: [] };
+    const width =
+      typeof (s as Record<string, unknown>).width === "number"
+        ? ((s as Record<string, unknown>).width as number)
+        : 1080;
+    const height =
+      typeof (s as Record<string, unknown>).height === "number"
+        ? ((s as Record<string, unknown>).height as number)
+        : 1080;
+    const objectsRaw = Array.isArray((s as Record<string, unknown>).objects)
+      ? ((s as Record<string, unknown>).objects as unknown[])
+      : [];
+    const objects = objectsRaw.filter((o) => o && typeof o === "object") as unknown as SlideV1["objects"];
+    const background =
+      (s as Record<string, unknown>).background &&
+      typeof (s as Record<string, unknown>).background === "object"
+        ? ((s as Record<string, unknown>).background as SlideV1["background"])
+        : null;
+    return { ...(s as unknown as SlideV1), width, height, objects, background };
+  }, [selectedSlide]);
+
+  const onCanvasSlideChange = React.useCallback(
+    (nextSlide: SlideV1) => {
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+        if (selectedSlideIndex - 1 >= 0 && selectedSlideIndex - 1 < prevSlides.length) {
+          prevSlides[selectedSlideIndex - 1] = nextSlide as unknown as SlideLike;
+        }
+        return { ...prev, slides: prevSlides };
+      });
+      setDirty(true);
+    },
+    [props.slides, selectedSlideIndex]
+  );
 
   return (
     <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-screen w-screen overflow-x-hidden bg-muted/30">
@@ -761,7 +799,8 @@ export default function StudioShell(props: Props) {
                       <textarea
                         name="editorStateJson"
                         className="h-48 w-full rounded-xl border bg-background p-3 font-mono text-xs"
-                        defaultValue={props.defaults.editorStateJson}
+                        value={editorStateJson}
+                        readOnly
                       />
                       <button
                         className="w-full rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
@@ -780,41 +819,48 @@ export default function StudioShell(props: Props) {
 
           {/* Canvas */}
           <section className="relative mx-auto max-w-[980px] pb-8 pt-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div className="text-xs text-muted-foreground">
                 Slide{" "}
                 <span className="rounded-full bg-background/70 px-2 py-0.5 font-mono">
                   {selectedSlideIndex}/{Math.max(1, props.slideCount)}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => setLeftOpen((v) => !v)}
-                className="rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary md:hidden"
-              >
-                Painel
-              </button>
+              <div className="flex items-center gap-2">
+                <form action={saveEditorStateAction} className="hidden sm:block">
+                  <input type="hidden" name="carouselId" value={props.carouselId} />
+                  <input type="hidden" name="currentSlide" value={selectedSlideIndex} />
+                  <input type="hidden" name="editorStateJson" value={editorStateJson} />
+                  <button
+                    type="submit"
+                    disabled={!dirty}
+                    className="rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background/70"
+                  >
+                    Salvar
+                  </button>
+                </form>
+                <button
+                  type="button"
+                  onClick={() => setLeftOpen((v) => !v)}
+                  className="rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary md:hidden"
+                >
+                  Painel
+                </button>
+              </div>
             </div>
 
             <div
               className="relative mt-5 flex items-center justify-center transition-transform duration-200 ease-out"
               style={{ transform: `translateX(${leftShiftPx}px)` }}
             >
-              <div className="relative aspect-square w-full max-w-[720px] rounded-[28px] bg-background p-10 shadow-[0_30px_120px_rgba(0,0,0,0.14)]">
-                <div className="text-xs text-muted-foreground">Preview (placeholder)</div>
-                <div className="mt-6 text-5xl font-semibold tracking-tight">
-                  {getSlideTitle(selectedSlide, selectedSlideIndex)}
+              <div className="relative aspect-square w-full max-w-[720px] overflow-hidden rounded-[28px] bg-background shadow-[0_30px_120px_rgba(0,0,0,0.14)]">
+                <div className="pointer-events-none absolute left-8 top-6 z-10 text-xs text-muted-foreground">
+                  Canvas (MVP)
                 </div>
-                {getSlideBody(selectedSlide) ? (
-                  <div className="mt-6 max-w-xl text-lg text-muted-foreground">
-                    {getSlideBody(selectedSlide)}
-                  </div>
-                ) : (
-                  <div className="mt-6 max-w-xl text-sm text-muted-foreground">
-                    Gere um rascunho para preencher os slides.
-                  </div>
-                )}
-
+                <FabricSlideCanvas
+                  slide={canvasSlide}
+                  onSlideChange={onCanvasSlideChange}
+                />
               </div>
             </div>
 
