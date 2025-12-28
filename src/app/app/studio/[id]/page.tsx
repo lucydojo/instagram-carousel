@@ -1,28 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { getStudioProject } from "@/lib/studio/queries";
-import {
-  applyNaturalLanguageEdit,
-  cleanupPlaceholderGeneratedAssets,
-  generateFirstDraft,
-  saveCarouselElementLocksFromForm,
-  saveCarouselEditorStateFromForm
-} from "@/lib/studio/actions";
 import { GEMINI_IMAGE_MODELS } from "@/lib/ai/gemini_image";
 import { createSignedUrl } from "@/lib/studio/storage";
 import StudioShell from "./StudioShell";
-
-function toStudioUrl(id: string, qs: URLSearchParams) {
-  const query = qs.toString();
-  return query ? `/app/studio/${id}?${query}` : `/app/studio/${id}`;
-}
-
-function getSlideParam(value: FormDataEntryValue | null): number | null {
-  if (typeof value !== "string") return null;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  const i = Math.trunc(n);
-  return i > 0 ? i : null;
-}
 
 type SearchParams = {
   slide?: string;
@@ -85,103 +65,6 @@ export default async function StudioPage({
     if (i > Math.max(1, slideCount)) return Math.max(1, slideCount);
     return i;
   })();
-
-  function redirectWith(
-    formData: FormData,
-    extras: Record<string, string | null>
-  ) {
-    const qs = new URLSearchParams();
-    const currentSlide = getSlideParam(formData.get("currentSlide"));
-    const slideIndex = currentSlide ?? selectedSlideIndex;
-    if (Number.isFinite(slideIndex)) qs.set("slide", String(slideIndex));
-    for (const [key, value] of Object.entries(extras)) {
-      if (value === null) qs.delete(key);
-      else qs.set(key, value);
-    }
-    redirect(toStudioUrl(id, qs));
-  }
-
-  async function saveEditorState(formData: FormData) {
-    "use server";
-    try {
-      const result = await saveCarouselEditorStateFromForm(formData);
-      if (!result.ok) redirectWith(formData, { error: result.error });
-      redirectWith(formData, { saved: "1" });
-    } catch {
-      redirectWith(formData, { error: "Erro ao salvar. Tente novamente." });
-    }
-  }
-
-  async function generate(formData: FormData) {
-    "use server";
-    const imageModel = formData.get("imageModel")
-      ? String(formData.get("imageModel"))
-      : undefined;
-    const result = await generateFirstDraft({ carouselId: id, imageModel });
-    if (!result.ok) {
-      const message =
-        result.error === "UNAUTHENTICATED"
-          ? "Você precisa entrar novamente."
-          : String(result.error ?? "Falha ao gerar.");
-      redirectWith(formData, { error: message });
-    }
-    redirectWith(formData, { saved: null, error: null });
-  }
-
-  async function cleanup(formData: FormData) {
-    "use server";
-    const result = await cleanupPlaceholderGeneratedAssets({ carouselId: id });
-    if (!result.ok) {
-      const message =
-        result.error === "UNAUTHENTICATED"
-          ? "Você precisa entrar novamente."
-          : String(result.error ?? "Falha ao limpar.");
-      redirectWith(formData, { error: message });
-    }
-    redirectWith(formData, { cleaned: String(result.deleted), error: null });
-  }
-
-  async function saveLocks(formData: FormData) {
-    "use server";
-    const result = await saveCarouselElementLocksFromForm(formData);
-    if (!result.ok) redirectWith(formData, { error: result.error });
-    redirectWith(formData, { locksSaved: "1", error: null });
-  }
-
-  async function edit(formData: FormData) {
-    "use server";
-    const instruction = formData.get("instruction")
-      ? String(formData.get("instruction"))
-      : "";
-    const slideIndexRaw = formData.get("slideIndex");
-    const slideIndex =
-      typeof slideIndexRaw === "string" && slideIndexRaw.trim().length > 0
-        ? Number(slideIndexRaw)
-        : undefined;
-
-    const result = await applyNaturalLanguageEdit({
-      carouselId: id,
-      instruction,
-      slideIndex: Number.isFinite(slideIndex) ? slideIndex : undefined
-    });
-
-    if (!result.ok) {
-      const message =
-        result.error === "UNAUTHENTICATED"
-          ? "Você precisa entrar novamente."
-          : String(result.error ?? "Falha ao aplicar edição.");
-      redirectWith(formData, { error: message });
-    }
-
-    redirectWith(formData, {
-      edited: "1",
-      applied: String(result.applied),
-      locked: String(result.skippedLocked),
-      missing: String(result.skippedMissing),
-      editSummary: result.summary ?? null,
-      error: null
-    });
-  }
 
   const placeholderCount = project.assets.filter((a) => {
     const meta = a.metadata as unknown;
@@ -261,13 +144,6 @@ export default async function StudioPage({
         missing
       }}
       imageModels={Object.values(GEMINI_IMAGE_MODELS)}
-      actions={{
-        generate,
-        cleanup,
-        edit,
-        saveLocks,
-        saveEditorState
-      }}
       defaults={{
         elementLocksJson: JSON.stringify(
           projectData.carousel.element_locks ?? {},

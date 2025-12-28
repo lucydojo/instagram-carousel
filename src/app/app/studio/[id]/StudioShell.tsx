@@ -15,6 +15,13 @@ import {
   Type,
   UserCircle2
 } from "lucide-react";
+import {
+  studioCleanup,
+  studioEdit,
+  studioGenerate,
+  studioSaveEditorState,
+  studioSaveLocks
+} from "./actions";
 
 type Asset = {
   id: string;
@@ -87,13 +94,6 @@ type Props = {
   };
   flash: Flash;
   imageModels: string[];
-  actions: {
-    generate: (formData: FormData) => Promise<void>;
-    cleanup: (formData: FormData) => Promise<void>;
-    edit: (formData: FormData) => Promise<void>;
-    saveLocks: (formData: FormData) => Promise<void>;
-    saveEditorState: (formData: FormData) => Promise<void>;
-  };
   defaults: {
     elementLocksJson: string;
     editorStateJson: string;
@@ -205,6 +205,10 @@ export default function StudioShell(props: Props) {
   const showBrand = activeDock === "brand";
   const showColors = activeDock === "colors";
   const showText = activeDock === "text";
+
+  const generateAction = studioGenerate;
+  const editAction = studioEdit;
+  const saveLocksAction = studioSaveLocks;
 
   return (
     <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-screen w-screen overflow-x-hidden bg-muted/30">
@@ -410,7 +414,8 @@ export default function StudioShell(props: Props) {
                         )}
                       </div>
 
-                      <form action={props.actions.generate} className="space-y-2">
+                      <form action={generateAction} className="space-y-2">
+                        <input type="hidden" name="carouselId" value={props.carouselId} />
                         <input
                           type="hidden"
                           name="currentSlide"
@@ -446,7 +451,8 @@ export default function StudioShell(props: Props) {
                       </form>
 
                       {props.placeholderCount > 0 ? (
-                        <form action={props.actions.cleanup}>
+                        <form action={studioCleanup}>
+                          <input type="hidden" name="carouselId" value={props.carouselId} />
                           <input
                             type="hidden"
                             name="currentSlide"
@@ -470,7 +476,8 @@ export default function StudioShell(props: Props) {
                         </span>
                       </div>
 
-                      <form action={props.actions.edit} className="space-y-2">
+                      <form action={editAction} className="space-y-2">
+                        <input type="hidden" name="carouselId" value={props.carouselId} />
                         <input
                           type="hidden"
                           name="currentSlide"
@@ -715,7 +722,8 @@ export default function StudioShell(props: Props) {
                   <div className="text-xs text-muted-foreground">
                     Formato: <span className="font-mono">{`{"slide_1":{"title":true}}`}</span>
                   </div>
-                  <form action={props.actions.saveLocks} className="space-y-2">
+                  <form action={saveLocksAction} className="space-y-2">
+                    <input type="hidden" name="carouselId" value={props.carouselId} />
                     <input
                       type="hidden"
                       name="currentSlide"
@@ -741,7 +749,8 @@ export default function StudioShell(props: Props) {
                       <div className="text-sm font-medium">Editor State (JSON)</div>
                       <span className="text-xs text-muted-foreground">avançado</span>
                     </div>
-                    <form action={props.actions.saveEditorState} className="space-y-2">
+                    <form action={studioSaveEditorState} className="space-y-2">
+                      <input type="hidden" name="carouselId" value={props.carouselId} />
                       <input
                         type="hidden"
                         name="currentSlide"
