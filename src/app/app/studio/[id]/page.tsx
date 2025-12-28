@@ -23,6 +23,20 @@ type SignedAsset = {
   signedUrl: string | null;
 };
 
+type StudioPalette = {
+  id: string;
+  name: string;
+  is_global: boolean;
+  palette_data: Record<string, unknown>;
+};
+
+type StudioTemplate = {
+  id: string;
+  name: string;
+  is_global: boolean;
+  template_data: Record<string, unknown>;
+};
+
 export default async function StudioPage({
   params,
   searchParams
@@ -132,6 +146,8 @@ export default async function StudioPage({
       statusLabel={statusLabel}
       progress={{ imagesDone, imagesTotal, imagesFailed }}
       assets={{ generated: signedGeneratedAssets, reference: signedReferenceAssets }}
+      palettes={projectData.palettes as unknown as StudioPalette[]}
+      templates={projectData.templates as unknown as StudioTemplate[]}
       catalog={{
         templates: projectData.templates.length,
         presets: projectData.presets.length,
