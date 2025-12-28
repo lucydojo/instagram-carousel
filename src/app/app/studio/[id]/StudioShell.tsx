@@ -369,14 +369,14 @@ export default function StudioShell(props: Props) {
           {/* Left panel */}
           <AnimatePresence>
             {leftOpen ? (
-              <motion.aside
-                initial={{ opacity: 0, x: -28 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -28 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
-                className="fixed left-24 top-1/2 z-30 hidden w-[380px] -translate-y-1/2 md:block"
-              >
-                <div className="max-h-[calc(100vh-9rem)] overflow-hidden rounded-3xl border border-border bg-background/90 shadow-lg backdrop-blur">
+              <aside className="fixed left-24 top-1/2 z-30 hidden w-[380px] -translate-y-1/2 md:block">
+                <motion.div
+                  initial={{ opacity: 0, x: -28 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -28 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  className="max-h-[calc(100vh-9rem)] overflow-hidden rounded-3xl border border-border bg-background/90 shadow-lg backdrop-blur"
+                >
                   <div className="flex items-center justify-between border-b border-border px-4 py-3">
                     <div className="text-base font-semibold">
                       {activeDock === "generate"
@@ -773,8 +773,8 @@ export default function StudioShell(props: Props) {
                   </div>
                 ) : null}
               </div>
-            </div>
-              </motion.aside>
+                </motion.div>
+              </aside>
             ) : null}
           </AnimatePresence>
 
