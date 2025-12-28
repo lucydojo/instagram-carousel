@@ -56,17 +56,16 @@ function createId(prefix = "obj") {
 }
 
 function getActiveIds(canvas: Canvas): string[] {
-  const active = canvas.getActiveObject() as unknown as
-    | (FabricObject & { type?: string; getObjects?: () => FabricObject[] })
-    | null;
-  if (!active) return [];
-  if (active.type === "activeSelection" && typeof active.getObjects === "function") {
-    return active
-      .getObjects()
-      .map((o) => getObjectId(o))
-      .filter((v): v is string => typeof v === "string");
-  }
-  const id = getObjectId(active);
+  // Fabric already normalizes multi-selection via getActiveObjects().
+  const activeObjects = canvas.getActiveObjects() as FabricObject[];
+  const ids = activeObjects
+    .map((o) => getObjectId(o))
+    .filter((v): v is string => typeof v === "string");
+  if (ids.length > 0) return ids;
+
+  // Fallback: single active object.
+  const active = canvas.getActiveObject() as FabricObject | null;
+  const id = active ? getObjectId(active) : null;
   return id ? [id] : [];
 }
 
