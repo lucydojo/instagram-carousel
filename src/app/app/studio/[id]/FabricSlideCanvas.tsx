@@ -102,6 +102,31 @@ export default function FabricSlideCanvas({
       canvas.requestRenderAll();
     };
 
+    const onEditingExited = (e: { target?: FabricObject }) => {
+      if (isHydratingRef.current) return;
+      const target = e.target;
+      if (!target) return;
+
+      const id = getObjectId(target);
+      if (!id) return;
+
+      const text = (target as unknown as { text?: unknown }).text;
+      if (typeof text !== "string") return;
+
+      // UX: like "Canvas" apps — if the user leaves editing with an empty
+      // textbox, auto-delete the object.
+      if (text.trim().length > 0) return;
+
+      const currentSlide = slideRef.current;
+      const nextObjects = currentSlide.objects.filter((o) => o?.id !== id);
+
+      canvas.remove(target);
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
+
+      emit({ ...currentSlide, objects: nextObjects });
+    };
+
     const onModified = (e: { target?: FabricObject }) => {
       if (isHydratingRef.current) return;
       const target = e.target;
@@ -187,11 +212,13 @@ export default function FabricSlideCanvas({
     canvas.on("object:modified", onModified);
     canvas.on("text:changed", onTextChanged);
     canvas.on("text:editing:entered", onEditingEntered);
+    canvas.on("text:editing:exited", onEditingExited);
 
     return () => {
       canvas.off("object:modified", onModified);
       canvas.off("text:changed", onTextChanged);
       canvas.off("text:editing:entered", onEditingEntered);
+      canvas.off("text:editing:exited", onEditingExited);
       canvas.dispose();
       fabricRef.current = null;
     };
