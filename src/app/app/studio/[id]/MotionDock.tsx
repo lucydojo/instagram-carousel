@@ -111,10 +111,10 @@ export function MotionDockItem({
       onFocus={() => setIsVisible(true)}
       onBlur={() => setIsVisible(false)}
       className={[
-        "relative inline-flex items-center justify-center rounded-xl transition-colors",
+        "relative inline-flex items-center justify-center rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
         active
           ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+          : "text-muted-foreground hover:text-foreground"
       ].join(" ")}
       aria-label={label}
     >
