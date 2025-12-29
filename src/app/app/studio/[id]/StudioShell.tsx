@@ -15,7 +15,6 @@ import {
   LayoutGrid,
   Lock,
   Palette,
-  Pencil,
   Sparkles,
   Trash2,
   Type,
@@ -27,7 +26,6 @@ import {
   studioDeletePalette,
   studioEdit,
   studioGenerate,
-  studioRenamePalette,
   studioSaveEditorState,
   studioSaveEditorStateInline,
   studioSaveLocks
@@ -308,7 +306,6 @@ function rectToPct(rect: { x: number; y: number; w: number; h: number }) {
 function PaletteSwatchButton(props: {
   palette: PaletteV1;
   active: boolean;
-  title: string;
   onClick: () => void;
   actions?: React.ReactNode;
 }) {
@@ -316,7 +313,6 @@ function PaletteSwatchButton(props: {
     <div className="group relative h-9">
       <button
         type="button"
-        title={props.title}
         onClick={props.onClick}
         className={[
           "h-full w-full overflow-hidden rounded-xl border bg-background shadow-sm transition",
@@ -495,10 +491,7 @@ export default function StudioShell(props: Props) {
   }, [props.palettes]);
 
   const userPaletteOptions = React.useMemo(() => {
-    return paletteOptions
-      .filter((p) => !p.is_global)
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    return paletteOptions.filter((p) => !p.is_global);
   }, [paletteOptions]);
 
   const globalPaletteOptions = React.useMemo(() => {
@@ -709,42 +702,11 @@ export default function StudioShell(props: Props) {
     return result.id;
   }, [customPalette]);
 
-  const [paletteRenameDraft, setPaletteRenameDraft] = React.useState<{
-    id: string | null;
-    name: string;
-  }>({ id: null, name: "" });
-
-  const startRenamePalette = React.useCallback(
-    (id: string) => {
-      const current = paletteOptions.find((p) => p.id === id);
-      if (!current || current.is_global) return;
-      setPaletteRenameDraft({ id, name: current.name });
-    },
-    [paletteOptions]
-  );
-
-  const commitRenamePalette = React.useCallback(async () => {
-    const id = paletteRenameDraft.id;
-    const name = paletteRenameDraft.name.trim();
-    if (!id || !name) return;
-    const current = paletteOptions.find((p) => p.id === id);
-    if (!current || current.is_global) return;
-    const result = await studioRenamePalette({ id, name });
-    if (!result.ok) {
-      setSaveError("Não foi possível renomear a paleta.");
-      return;
-    }
-    setPaletteOptions((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
-    setPaletteRenameDraft({ id: null, name: "" });
-  }, [paletteOptions, paletteRenameDraft.id, paletteRenameDraft.name]);
-
   const deletePalette = React.useCallback(
     async (id: string) => {
       const current = paletteOptions.find((p) => p.id === id);
       if (!current || current.is_global) return;
-      const ok = window.confirm(
-        `Excluir a paleta “${current.name}”? Essa ação não pode ser desfeita.`
-      );
+      const ok = window.confirm("Excluir esta paleta? Essa ação não pode ser desfeita.");
       if (!ok) return;
       const result = await studioDeletePalette({ id });
       if (!result.ok) {
@@ -1586,25 +1548,12 @@ export default function StudioShell(props: Props) {
                                     key={p.id}
                                     palette={p.palette}
                                     active={checked}
-                                    title={p.name}
                                     onClick={() => {
                                       setPendingPaletteId(p.id);
                                       applyPaletteColors(p.palette, p.id);
                                     }}
                                     actions={
                                       <div className="flex gap-1">
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            startRenamePalette(p.id);
-                                          }}
-                                          className="rounded-md border bg-background/90 p-0.5 shadow-sm hover:bg-secondary"
-                                          aria-label="Renomear paleta"
-                                          title="Renomear"
-                                        >
-                                          <Pencil className="h-3 w-3" />
-                                        </button>
                                         <button
                                           type="button"
                                           onClick={(e) => {
@@ -1624,46 +1573,6 @@ export default function StudioShell(props: Props) {
                               })}
                             </div>
                           )}
-
-                          {paletteRenameDraft.id ? (
-                            <div className="mt-3 rounded-xl border bg-background p-2">
-                              <div className="text-[11px] font-medium text-muted-foreground">
-                                Renomear paleta
-                              </div>
-                              <div className="mt-2 flex items-center gap-2">
-                                <input
-                                  value={paletteRenameDraft.name}
-                                  onChange={(e) =>
-                                    setPaletteRenameDraft((prev) => ({
-                                      ...prev,
-                                      name: e.target.value
-                                    }))
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") void commitRenamePalette();
-                                    if (e.key === "Escape")
-                                      setPaletteRenameDraft({ id: null, name: "" });
-                                  }}
-                                  className="h-9 flex-1 rounded-lg border bg-background px-2 text-sm"
-                                  placeholder="Nome da paleta"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => void commitRenamePalette()}
-                                  className="h-9 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                                >
-                                  Salvar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setPaletteRenameDraft({ id: null, name: "" })}
-                                  className="h-9 rounded-lg border bg-background px-3 text-sm hover:bg-secondary"
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
                         </div>
 
                         <div className="rounded-xl border bg-background/70 p-3">
@@ -1678,7 +1587,6 @@ export default function StudioShell(props: Props) {
                                   key={p.id}
                                   palette={p.palette}
                                   active={checked}
-                                  title={p.name}
                                   onClick={() => {
                                     setPendingPaletteId(p.id);
                                     applyPaletteColors(p.palette, p.id);
