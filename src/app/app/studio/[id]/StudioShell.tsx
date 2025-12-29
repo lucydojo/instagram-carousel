@@ -313,13 +313,13 @@ function PaletteSwatchButton(props: {
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="group relative h-10 w-[74px]">
+    <div className="group relative h-9">
       <button
         type="button"
         title={props.title}
         onClick={props.onClick}
         className={[
-          "h-full w-full overflow-hidden rounded-2xl border bg-background shadow-sm transition",
+          "h-full w-full overflow-hidden rounded-xl border bg-background shadow-sm transition",
           props.active ? "ring-2 ring-primary/40" : "hover:bg-secondary"
         ].join(" ")}
       >
@@ -332,10 +332,8 @@ function PaletteSwatchButton(props: {
       {props.actions ? (
         <div
           className={[
-            "pointer-events-none absolute inset-0 flex items-end justify-end p-1 transition-opacity",
-            props.active
-              ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+            "pointer-events-none absolute inset-0 flex items-start justify-end p-1 transition-opacity",
+            "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
           ].join(" ")}
         >
           <div className="pointer-events-auto">{props.actions}</div>
@@ -509,15 +507,6 @@ export default function StudioShell(props: Props) {
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [paletteOptions]);
-
-  const globalPaletteGroups = React.useMemo(() => {
-    const dojo = globalPaletteOptions.filter((p) => /dojo/i.test(p.name));
-    const other = globalPaletteOptions.filter((p) => !/dojo/i.test(p.name));
-    const groups: Array<{ label: string; palettes: PaletteOption[] }> = [];
-    if (dojo.length) groups.push({ label: "Dojo", palettes: dojo });
-    if (other.length) groups.push({ label: "Outras", palettes: other });
-    return groups;
-  }, [globalPaletteOptions]);
 
   const selectedPaletteId =
     typeof currentGlobal.paletteId === "string" &&
@@ -1589,7 +1578,7 @@ export default function StudioShell(props: Props) {
                               Salve uma paleta em “Custom” para ela aparecer aqui.
                             </div>
                           ) : (
-                            <div className="mt-2 flex flex-wrap gap-2">
+                            <div className="mt-2 grid grid-cols-4 gap-2">
                               {userPaletteOptions.map((p) => {
                                 const checked = p.id === pendingPaletteId;
                                 return (
@@ -1603,18 +1592,18 @@ export default function StudioShell(props: Props) {
                                       applyPaletteColors(p.palette, p.id);
                                     }}
                                     actions={
-                                      <>
+                                      <div className="flex gap-1">
                                         <button
                                           type="button"
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             startRenamePalette(p.id);
                                           }}
-                                          className="rounded-lg border bg-background/90 p-1 shadow-sm hover:bg-secondary"
+                                          className="rounded-md border bg-background/90 p-0.5 shadow-sm hover:bg-secondary"
                                           aria-label="Renomear paleta"
                                           title="Renomear"
                                         >
-                                          <Pencil className="h-3.5 w-3.5" />
+                                          <Pencil className="h-3 w-3" />
                                         </button>
                                         <button
                                           type="button"
@@ -1622,13 +1611,13 @@ export default function StudioShell(props: Props) {
                                             e.stopPropagation();
                                             void deletePalette(p.id);
                                           }}
-                                          className="ml-1 rounded-lg border bg-background/90 p-1 shadow-sm hover:bg-secondary"
+                                          className="rounded-md border bg-background/90 p-0.5 shadow-sm hover:bg-secondary"
                                           aria-label="Excluir paleta"
                                           title="Excluir"
                                         >
-                                          <Trash2 className="h-3.5 w-3.5" />
+                                          <Trash2 className="h-3 w-3" />
                                         </button>
-                                      </>
+                                      </div>
                                     }
                                   />
                                 );
@@ -1681,34 +1670,22 @@ export default function StudioShell(props: Props) {
                           <div className="text-xs font-medium text-muted-foreground">
                             Globais
                           </div>
-                          <div className="mt-2 space-y-3">
-                            {globalPaletteGroups.map((group) => (
-                              <div
-                                key={group.label}
-                                className="rounded-xl border bg-background p-2"
-                              >
-                                <div className="text-[11px] text-muted-foreground">
-                                  {group.label}
-                                </div>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {group.palettes.map((p) => {
-                                    const checked = p.id === pendingPaletteId;
-                                    return (
-                                      <PaletteSwatchButton
-                                        key={p.id}
-                                        palette={p.palette}
-                                        active={checked}
-                                        title={p.name}
-                                        onClick={() => {
-                                          setPendingPaletteId(p.id);
-                                          applyPaletteColors(p.palette, p.id);
-                                        }}
-                                      />
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            ))}
+                          <div className="mt-2 grid grid-cols-4 gap-2">
+                            {globalPaletteOptions.map((p) => {
+                              const checked = p.id === pendingPaletteId;
+                              return (
+                                <PaletteSwatchButton
+                                  key={p.id}
+                                  palette={p.palette}
+                                  active={checked}
+                                  title={p.name}
+                                  onClick={() => {
+                                    setPendingPaletteId(p.id);
+                                    applyPaletteColors(p.palette, p.id);
+                                  }}
+                                />
+                              );
+                            })}
                           </div>
                         </div>
 
