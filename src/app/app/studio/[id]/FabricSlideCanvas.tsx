@@ -93,11 +93,12 @@ type Props = {
   className?: string;
   renderKey: string | number;
   onSlideChange: (next: SlideV1) => void;
+  onSelectionChange?: (ids: string[]) => void;
 };
 
 const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   function FabricSlideCanvas(
-    { slide, assetUrlsById, className, renderKey, onSlideChange },
+    { slide, assetUrlsById, className, renderKey, onSlideChange, onSelectionChange },
     ref
   ) {
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -111,6 +112,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   const clipboardRef = React.useRef<{ objects: SlideObjectV1[]; pasteN: number } | null>(
     null
   );
+  const onSelectionChangeRef = React.useRef<Props["onSelectionChange"]>(null);
+
+  React.useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange ?? null;
+  }, [onSelectionChange]);
 
   const emit = React.useCallback(
     (next: SlideV1) => {
@@ -354,6 +360,12 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     });
     fabricRef.current = canvas;
 
+    const emitSelection = () => {
+      const cb = onSelectionChangeRef.current;
+      if (!cb) return;
+      cb(getActiveIds(canvas));
+    };
+
     const onEditingEntered = (e: { target?: FabricObject }) => {
       const target = e.target as unknown as { initDimensions?: () => void } | undefined;
       target?.initDimensions?.();
@@ -525,12 +537,22 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
     const onTextChanged = (e: { target?: FabricObject }) => onModified(e);
 
+    canvas.on("selection:created", emitSelection);
+    canvas.on("selection:updated", emitSelection);
+    canvas.on("selection:cleared", () => {
+      const cb = onSelectionChangeRef.current;
+      if (!cb) return;
+      cb([]);
+    });
     canvas.on("object:modified", onModified);
     canvas.on("text:changed", onTextChanged);
     canvas.on("text:editing:entered", onEditingEntered);
     canvas.on("text:editing:exited", onEditingExited);
 
     return () => {
+      canvas.off("selection:created", emitSelection);
+      canvas.off("selection:updated", emitSelection);
+      canvas.off("selection:cleared");
       canvas.off("object:modified", onModified);
       canvas.off("text:changed", onTextChanged);
       canvas.off("text:editing:entered", onEditingEntered);

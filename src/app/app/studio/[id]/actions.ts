@@ -68,6 +68,16 @@ export async function studioSaveEditorStateInline(input: {
   return await saveCarouselEditorStateFromForm(formData);
 }
 
+export async function studioSaveLocksInline(input: {
+  carouselId: string;
+  elementLocksJson: string;
+}) {
+  const formData = new FormData();
+  formData.set("carouselId", input.carouselId);
+  formData.set("elementLocksJson", input.elementLocksJson);
+  return await saveCarouselElementLocksFromForm(formData);
+}
+
 export async function studioCreatePalette(input: {
   name: string;
   paletteData: Record<string, unknown>;

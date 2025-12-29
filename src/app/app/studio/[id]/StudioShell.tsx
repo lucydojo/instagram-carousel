@@ -28,7 +28,7 @@ import {
   studioGenerate,
   studioSaveEditorState,
   studioSaveEditorStateInline,
-  studioSaveLocks
+  studioSaveLocksInline
 } from "./actions";
 import { MotionDock, MotionDockItem } from "./MotionDock";
 import FabricSlideCanvas, {
@@ -361,6 +361,8 @@ export default function StudioShell(props: Props) {
   const [dirty, setDirty] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = React.useState<string | null>(null);
+  const [selectedObjectIds, setSelectedObjectIds] = React.useState<string[]>([]);
+  const [locksDirty, setLocksDirty] = React.useState(false);
   const [canvasRevision, setCanvasRevision] = React.useState(0);
   const [leftOpen, setLeftOpen] = React.useState(false);
   const [assetsTab, setAssetsTab] = React.useState<"generated" | "reference">(
@@ -374,6 +376,13 @@ export default function StudioShell(props: Props) {
         slides: props.slides
       }
   );
+  const [elementLocks, setElementLocks] = React.useState<
+    Record<string, Record<string, boolean>>
+  >(() => {
+    const parsed = safeParseJson<Record<string, unknown>>(props.defaults.elementLocksJson);
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed as unknown as Record<string, Record<string, boolean>>;
+  });
   const historyRef = React.useRef<
     Map<number, { past: string[]; future: string[]; lastPushedAt: number }>
   >(new Map());
@@ -383,6 +392,7 @@ export default function StudioShell(props: Props) {
     setSelectedSlideIndex((current) =>
       clampInt(current, 1, Math.max(1, props.slideCount))
     );
+    setSelectedObjectIds([]);
   }, [props.slideCount]);
 
   React.useEffect(() => {
@@ -457,9 +467,22 @@ export default function StudioShell(props: Props) {
   }, [props.assets.generated, props.assets.reference]);
   const selectedSlide =
     slidesFromState.length > 0 ? slidesFromState[selectedSlideIndex - 1] : null;
+  const currentSlideKey = React.useMemo(() => {
+    const rawId =
+      selectedSlide && typeof selectedSlide === "object"
+        ? (selectedSlide as Record<string, unknown>).id
+        : null;
+    return typeof rawId === "string" && rawId.trim().length > 0
+      ? rawId
+      : `slide_${selectedSlideIndex}`;
+  }, [selectedSlide, selectedSlideIndex]);
   const editorStateJson = React.useMemo(
     () => JSON.stringify(editorState, null, 2),
     [editorState]
+  );
+  const elementLocksJson = React.useMemo(
+    () => JSON.stringify(elementLocks ?? {}, null, 2),
+    [elementLocks]
   );
 
   const currentGlobal = React.useMemo(() => {
@@ -777,6 +800,28 @@ export default function StudioShell(props: Props) {
     });
   }, [dirty, editorStateJson, isPending, props.carouselId, startTransition]);
 
+  const saveLocksNow = React.useCallback(() => {
+    if (!locksDirty || isPending) return;
+    setSaveError(null);
+    const elementLocksJson = JSON.stringify(elementLocks ?? {}, null, 2);
+    startTransition(() => {
+      studioSaveLocksInline({
+        carouselId: props.carouselId,
+        elementLocksJson
+      })
+        .then((result) => {
+          if (!result.ok) {
+            setSaveError(result.error);
+            return;
+          }
+          setLocksDirty(false);
+        })
+        .catch(() => {
+          setSaveError("Erro ao salvar locks. Tente novamente.");
+        });
+    });
+  }, [elementLocks, isPending, locksDirty, props.carouselId, startTransition]);
+
   React.useEffect(() => {
     if (!dirty) return;
     const t = window.setTimeout(() => {
@@ -784,6 +829,36 @@ export default function StudioShell(props: Props) {
     }, 1500);
     return () => window.clearTimeout(t);
   }, [dirty, editorStateJson, saveNow]);
+
+  React.useEffect(() => {
+    if (!locksDirty) return;
+    const t = window.setTimeout(() => {
+      saveLocksNow();
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [locksDirty, elementLocks, saveLocksNow]);
+
+  function isLocked(objectId: string) {
+    const bySlide = elementLocks?.[currentSlideKey];
+    return Boolean(bySlide && bySlide[objectId]);
+  }
+
+  const toggleLocksForSelection = React.useCallback(() => {
+    if (selectedObjectIds.length === 0) return;
+    const allLocked = selectedObjectIds.every((id) => isLocked(id));
+    setElementLocks((prev) => {
+      const next: Record<string, Record<string, boolean>> = { ...(prev ?? {}) };
+      const slideLocks: Record<string, boolean> = { ...(next[currentSlideKey] ?? {}) };
+      for (const id of selectedObjectIds) {
+        if (allLocked) delete slideLocks[id];
+        else slideLocks[id] = true;
+      }
+      if (Object.keys(slideLocks).length === 0) delete next[currentSlideKey];
+      else next[currentSlideKey] = slideLocks;
+      return next;
+    });
+    setLocksDirty(true);
+  }, [currentSlideKey, selectedObjectIds]);
 
   function getHistoryEntry(index: number) {
     const current = historyRef.current.get(index);
@@ -880,7 +955,6 @@ export default function StudioShell(props: Props) {
 
   const generateAction = studioGenerate;
   const editAction = studioEdit;
-  const saveLocksAction = studioSaveLocks;
   const saveEditorStateAction = studioSaveEditorState;
 
   const leftShiftPx = leftOpen ? 220 : 0;
@@ -922,6 +996,30 @@ export default function StudioShell(props: Props) {
       .filter((img) => !filled.has(img.id))
       .map((img) => ({ id: img.id, bounds: img.bounds }));
   }, [canvasSlide.objects, effectiveTemplate.images]);
+
+  const lockedBadges = React.useMemo(() => {
+    const slideLocks = elementLocks?.[currentSlideKey] ?? {};
+    const ids = Object.entries(slideLocks)
+      .filter(([, v]) => Boolean(v))
+      .map(([id]) => id);
+    if (ids.length === 0) return [];
+    const w = canvasSlide.width || 1080;
+    const h = canvasSlide.height || 1080;
+    const objects = (canvasSlide.objects ?? []) as unknown as Array<Record<string, unknown>>;
+    return ids
+      .map((id) => {
+        const obj = objects.find((o) => o && o.id === id);
+        if (!obj) return null;
+        const x = typeof obj.x === "number" ? obj.x : null;
+        const y = typeof obj.y === "number" ? obj.y : null;
+        const width = typeof obj.width === "number" ? obj.width : null;
+        if (x == null || y == null || width == null) return null;
+        const px = Math.min(1, Math.max(0, (x + width) / w));
+        const py = Math.min(1, Math.max(0, y / h));
+        return { id, leftPct: px * 100, topPct: py * 100 };
+      })
+      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+  }, [canvasSlide.height, canvasSlide.objects, canvasSlide.width, currentSlideKey, elementLocks]);
 
   const assignAssetToSlot = React.useCallback(
     (assetId: string) => {
@@ -1917,28 +2015,62 @@ export default function StudioShell(props: Props) {
                   <div className="space-y-3 rounded-2xl border bg-background px-4 py-3">
                     <div className="text-base font-medium">Locks</div>
                     <div className="text-xs text-muted-foreground">
-                      Locks protegem elementos contra alterações automáticas da IA. Formato:{" "}
-                      <span className="font-mono">{`{"slide_1":{"title":true}}`}</span>
+                      Locks protegem elementos contra alterações automáticas da IA (não impedem edição manual).
                     </div>
-                    <form action={saveLocksAction} className="space-y-2">
-                      <input type="hidden" name="carouselId" value={props.carouselId} />
-                      <input
-                        type="hidden"
-                        name="currentSlide"
-                        value={selectedSlideIndex}
-                      />
-                      <textarea
-                        name="elementLocksJson"
-                        className="h-36 w-full rounded-xl border bg-background p-3 font-mono text-xs"
-                        defaultValue={props.defaults.elementLocksJson}
-                      />
-                      <button
-                        className="w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        type="submit"
-                      >
-                        Salvar locks
-                      </button>
-                    </form>
+
+                    <div className="rounded-xl border bg-muted/30 p-3 text-xs">
+                      <div className="font-medium">Seleção</div>
+                      {selectedObjectIds.length === 0 ? (
+                        <div className="mt-1 text-muted-foreground">
+                          Selecione um elemento no canvas para bloquear/desbloquear.
+                        </div>
+                      ) : (
+                        <div className="mt-2 space-y-1">
+                          <div className="text-muted-foreground">
+                            {selectedObjectIds.length} elemento(s) selecionado(s).
+                          </div>
+                          <button
+                            type="button"
+                            onClick={toggleLocksForSelection}
+                            className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                          >
+                            <Lock className="h-4 w-4" />
+                            {selectedObjectIds.every((id) => isLocked(id))
+                              ? "Desbloquear seleção"
+                              : "Bloquear seleção"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                      Dica: o ícone “IA” aparece no canto do elemento bloqueado.
+                    </div>
+
+                    <details className="rounded-xl border bg-background p-3">
+                      <summary className="cursor-pointer text-sm font-medium">
+                        Avançado (JSON)
+                      </summary>
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        Formato esperado: <span className="font-mono">{`{"slide_1":{"title":true}}`}</span>
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        <textarea
+                          className="h-40 w-full rounded-xl border bg-background p-3 font-mono text-xs"
+                          value={elementLocksJson}
+                          readOnly
+                        />
+                        <button
+                          type="button"
+                          className="w-full rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(elementLocksJson);
+                          }}
+                        >
+                          Copiar JSON
+                        </button>
+                      </div>
+                    </details>
                   </div>
                 ) : null}
 
@@ -1996,6 +2128,26 @@ export default function StudioShell(props: Props) {
                 </button>
                 <button
                   type="button"
+                  onClick={toggleLocksForSelection}
+                  disabled={selectedObjectIds.length === 0 || isPending}
+                  title={
+                    selectedObjectIds.length === 0
+                      ? "Selecione um elemento para bloquear/desbloquear"
+                      : selectedObjectIds.every((id) => isLocked(id))
+                        ? "Desbloquear seleção (somente IA)"
+                        : "Bloquear seleção (somente IA)"
+                  }
+                  className="hidden items-center gap-2 rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40 sm:inline-flex"
+                >
+                  <Lock className="h-4 w-4" />
+                  {selectedObjectIds.length === 0
+                    ? "Locks"
+                    : selectedObjectIds.every((id) => isLocked(id))
+                      ? "Desbloquear"
+                      : "Bloquear"}
+                </button>
+                <button
+                  type="button"
                   onClick={saveNow}
                   disabled={!dirty || isPending}
                   className="hidden rounded-xl border bg-background/70 px-3 py-2 text-sm shadow-sm hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background/70 sm:block"
@@ -2035,7 +2187,23 @@ export default function StudioShell(props: Props) {
                   assetUrlsById={assetUrlsById}
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}
+                  onSelectionChange={setSelectedObjectIds}
                 />
+                {/* Locked indicator badges (AI lock) */}
+                {lockedBadges.map((b) => (
+                  <div
+                    key={b.id}
+                    className="pointer-events-none absolute z-20"
+                    style={{ left: `${b.leftPct}%`, top: `${b.topPct}%` }}
+                  >
+                    <div className="-translate-x-full -translate-y-2 rounded-full border bg-background/90 px-2 py-1 shadow-sm">
+                      <div className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+                        <Lock className="h-3 w-3" />
+                        IA
+                      </div>
+                    </div>
+                  </div>
+                ))}
                 {/* Image slot placeholders (template-driven) */}
                 {missingImageSlots.map((slot) => (
                   <button
