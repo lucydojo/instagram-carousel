@@ -6,7 +6,9 @@ import {
   applyNaturalLanguageEdit,
   cleanupPlaceholderGeneratedAssets,
   createUserPalette,
+  deleteUserPalette,
   generateFirstDraft,
+  renameUserPalette,
   saveCarouselElementLocksFromForm,
   saveCarouselEditorStateFromForm
 } from "@/lib/studio/actions";
@@ -75,6 +77,14 @@ export async function studioCreatePalette(input: {
     name: input.name,
     paletteData: input.paletteData
   });
+}
+
+export async function studioRenamePalette(input: { id: string; name: string }) {
+  return await renameUserPalette(input);
+}
+
+export async function studioDeletePalette(input: { id: string }) {
+  return await deleteUserPalette(input);
 }
 
 export async function studioGenerate(formData: FormData) {

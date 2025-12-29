@@ -140,6 +140,44 @@ export async function createUserPalette(input: {
   return { ok: true as const, id: data.id };
 }
 
+export async function renameUserPalette(input: { id: string; name: string }) {
+  const parsed = z.object({ id: idSchema, name: nameSchema }).safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid palette." };
+
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false as const, error: "UNAUTHENTICATED" };
+
+  const { data, error } = await supabase
+    .from("palettes")
+    .update({ name: parsed.data.name })
+    .eq("id", parsed.data.id)
+    .eq("owner_id", userData.user.id)
+    .eq("is_global", false)
+    .select("id")
+    .single();
+  if (error || !data) return { ok: false as const, error: error?.message ?? "" };
+  return { ok: true as const, id: data.id };
+}
+
+export async function deleteUserPalette(input: { id: string }) {
+  const parsed = z.object({ id: idSchema }).safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid palette." };
+
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false as const, error: "UNAUTHENTICATED" };
+
+  const { error } = await supabase
+    .from("palettes")
+    .delete()
+    .eq("id", parsed.data.id)
+    .eq("owner_id", userData.user.id)
+    .eq("is_global", false);
+  if (error) return { ok: false as const, error: error.message };
+  return { ok: true as const };
+}
+
 const templateSchema = z.object({
   name: nameSchema,
   templateData: z.record(z.unknown()),
