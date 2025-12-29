@@ -303,6 +303,14 @@ function rectToPct(rect: { x: number; y: number; w: number; h: number }) {
   };
 }
 
+function createStudioId(prefix: string) {
+  const rand =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  return `${prefix}_${rand}`;
+}
+
 function PaletteSwatchButton(props: {
   palette: PaletteV1;
   active: boolean;
@@ -915,6 +923,27 @@ export default function StudioShell(props: Props) {
       .map((img) => ({ id: img.id, bounds: img.bounds }));
   }, [canvasSlide.objects, effectiveTemplate.images]);
 
+  const placedImages = React.useMemo(() => {
+    const objects = canvasSlide.objects ?? [];
+    const w = canvasSlide.width || 1080;
+    const h = canvasSlide.height || 1080;
+    return (objects as unknown as Array<Record<string, unknown>>)
+      .filter((o) => o && o.type === "image")
+      .map((o) => {
+        const id = typeof o.id === "string" ? o.id : null;
+        const x = typeof o.x === "number" ? o.x : null;
+        const y = typeof o.y === "number" ? o.y : null;
+        const width = typeof o.width === "number" ? o.width : null;
+        const height = typeof o.height === "number" ? o.height : null;
+        const assetId = typeof o.assetId === "string" ? o.assetId : null;
+        if (!id || x == null || y == null || width == null || height == null || !assetId) {
+          return null;
+        }
+        return { id, bounds: { x: x / w, y: y / h, w: width / w, h: height / h } };
+      })
+      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+  }, [canvasSlide.height, canvasSlide.objects, canvasSlide.width]);
+
   const assignAssetToSlot = React.useCallback(
     (assetId: string) => {
       if (!slotPicker) return;
@@ -927,6 +956,15 @@ export default function StudioShell(props: Props) {
         const idx = slideIndex - 1;
         const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
         if (!slide || typeof slide !== "object") return prev;
+
+        // Undo support: snapshot current slide before mutation.
+        const entry = getHistoryEntry(slideIndex);
+        const snapshot = JSON.stringify(slide);
+        const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
+        if (snapshot !== last) entry.past.push(snapshot);
+        entry.future = [];
+        entry.lastPushedAt = Date.now();
+
         const slideObj = slide as Record<string, unknown>;
         const w = typeof slideObj.width === "number" ? (slideObj.width as number) : 1080;
         const h =
@@ -972,6 +1010,61 @@ export default function StudioShell(props: Props) {
       setSlotPicker(null);
     },
     [effectiveTemplate.images, props.slides, slotPicker]
+  );
+
+  const insertAssetIntoSlide = React.useCallback(
+    (assetId: string) => {
+      const slideIndex = selectedSlideIndex;
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+
+        const idx = slideIndex - 1;
+        const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
+        if (!slide || typeof slide !== "object") return prev;
+
+        const entry = getHistoryEntry(slideIndex);
+        const snapshot = JSON.stringify(slide);
+        const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
+        if (snapshot !== last) entry.past.push(snapshot);
+        entry.future = [];
+        entry.lastPushedAt = Date.now();
+
+        const slideObj = slide as Record<string, unknown>;
+        const w = typeof slideObj.width === "number" ? (slideObj.width as number) : 1080;
+        const h =
+          typeof slideObj.height === "number" ? (slideObj.height as number) : 1080;
+        const objects = Array.isArray(slideObj.objects)
+          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
+          : [];
+
+        const size = Math.round(Math.min(w, h) * 0.42);
+        const x = Math.round((w - size) / 2);
+        const y = Math.round((h - size) / 2);
+
+        const nextObjects = [
+          ...objects,
+          {
+            id: createStudioId("image"),
+            type: "image",
+            x,
+            y,
+            width: size,
+            height: size,
+            assetId
+          }
+        ];
+
+        const nextSlide = { ...slideObj, objects: nextObjects };
+        prevSlides[idx] = nextSlide;
+        return { ...prev, slides: prevSlides };
+      });
+
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
+    },
+    [props.slides, selectedSlideIndex]
   );
 
   const onCanvasSlideChange = React.useCallback(
@@ -1434,7 +1527,7 @@ export default function StudioShell(props: Props) {
                       </div>
                     ) : (
                       <div className="rounded-xl border bg-background/70 p-3 text-xs text-muted-foreground">
-                        Dica: clique no placeholder verde do canvas para selecionar um slot de imagem.
+                        Clique em uma imagem para inserir no canvas, ou clique no placeholder verde para preencher um slot.
                       </div>
                     )}
 
@@ -1462,10 +1555,13 @@ export default function StudioShell(props: Props) {
                               <button
                                 key={a.id}
                                 type="button"
-                                disabled={!slotPicker || !a.signedUrl}
+                                disabled={!a.signedUrl}
                                 onClick={() => {
-                                  if (!slotPicker) return;
-                                  assignAssetToSlot(a.id);
+                                  if (slotPicker) {
+                                    assignAssetToSlot(a.id);
+                                    return;
+                                  }
+                                  insertAssetIntoSlide(a.id);
                                 }}
                                 className="overflow-hidden rounded-xl bg-muted/30 disabled:cursor-not-allowed disabled:opacity-60"
                               >
@@ -1498,10 +1594,13 @@ export default function StudioShell(props: Props) {
                               <button
                                 key={a.id}
                                 type="button"
-                                disabled={!slotPicker || !a.signedUrl}
+                                disabled={!a.signedUrl}
                                 onClick={() => {
-                                  if (!slotPicker) return;
-                                  assignAssetToSlot(a.id);
+                                  if (slotPicker) {
+                                    assignAssetToSlot(a.id);
+                                    return;
+                                  }
+                                  insertAssetIntoSlide(a.id);
                                 }}
                                 className="overflow-hidden rounded-xl bg-muted/30 disabled:cursor-not-allowed disabled:opacity-60"
                               >
@@ -1958,6 +2057,19 @@ export default function StudioShell(props: Props) {
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}
                 />
+                {/* Click-catcher overlays for images (ensures easy selection) */}
+                {placedImages.map((img) => (
+                  <button
+                    key={img.id}
+                    type="button"
+                    className="absolute z-20 rounded-2xl bg-transparent hover:outline hover:outline-2 hover:outline-primary/30"
+                    style={rectToPct(img.bounds)}
+                    onClick={() => {
+                      canvasApiRef.current?.selectById(img.id);
+                    }}
+                    aria-label="Selecionar imagem"
+                  />
+                ))}
                 {/* Image slot placeholders (template-driven) */}
                 {missingImageSlots.map((slot) => (
                   <button

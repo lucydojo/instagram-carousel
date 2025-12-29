@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Canvas, Image, Rect, Textbox, type FabricObject } from "fabric";
+import { Canvas, Group, Image, Rect, Textbox, type FabricObject } from "fabric";
 
 type SlideObjectV1 = {
   id?: string;
@@ -33,6 +33,7 @@ export type FabricSlideCanvasHandle = {
   duplicateSelection: () => boolean;
   copySelection: () => boolean;
   paste: () => boolean;
+  selectById: (id: string) => boolean;
   exportPngDataUrl: (targetSize?: number) => string | null;
 };
 
@@ -76,6 +77,14 @@ function isAnyEditing(canvas: Canvas) {
   return canvas
     .getObjects()
     .some((o) => Boolean((o as unknown as { isEditing?: unknown }).isEditing));
+}
+
+function selectObjectById(canvas: Canvas, id: string) {
+  const obj = canvas.getObjects().find((o) => getObjectId(o as FabricObject) === id);
+  if (!obj) return false;
+  canvas.setActiveObject(obj as unknown as FabricObject);
+  canvas.requestRenderAll();
+  return true;
 }
 
 type Props = {
@@ -302,6 +311,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     }
   }, []);
 
+  const selectById = React.useCallback((id: string) => {
+    const canvas = fabricRef.current;
+    if (!canvas) return false;
+    if (isAnyEditing(canvas)) return false;
+    return selectObjectById(canvas, id);
+  }, []);
+
   React.useImperativeHandle(
     ref,
     () => ({
@@ -310,9 +326,18 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       duplicateSelection,
       copySelection,
       paste,
+      selectById,
       exportPngDataUrl
     }),
-    [addText, copySelection, deleteSelection, duplicateSelection, exportPngDataUrl, paste]
+    [
+      addText,
+      copySelection,
+      deleteSelection,
+      duplicateSelection,
+      exportPngDataUrl,
+      paste,
+      selectById
+    ]
   );
 
   React.useEffect(() => {
@@ -396,6 +421,39 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const top = clampNumber(target.top, 0);
       const scaleX = clampNumber(target.scaleX, 1);
       const scaleY = clampNumber(target.scaleY, 1);
+
+      const rawObj = currentSlide.objects.find((o) => o?.id === id);
+      if (rawObj?.type === "image") {
+        const getScaledWidth = (target as unknown as { getScaledWidth?: () => number })
+          .getScaledWidth;
+        const getScaledHeight = (target as unknown as { getScaledHeight?: () => number })
+          .getScaledHeight;
+        const scaledWidth =
+          typeof getScaledWidth === "function"
+            ? clampNumber(getScaledWidth(), 1)
+            : typeof target.width === "number"
+              ? Math.max(1, Math.round(target.width * scaleX))
+              : 1;
+        const scaledHeight =
+          typeof getScaledHeight === "function"
+            ? clampNumber(getScaledHeight(), 1)
+            : typeof target.height === "number"
+              ? Math.max(1, Math.round(target.height * scaleY))
+              : 1;
+
+        const nextObjects = currentSlide.objects.map((o) => {
+          if (!o || o.id !== id) return o;
+          return {
+            ...o,
+            x: Math.round(left),
+            y: Math.round(top),
+            width: Math.round(scaledWidth),
+            height: Math.round(scaledHeight)
+          };
+        });
+        emit({ ...currentSlide, objects: nextObjects });
+        return;
+      }
 
       let normalizedWidth: number | undefined;
       let normalizedHeight: number | undefined;
@@ -550,33 +608,68 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
           const iw = clampNumber((img as unknown as { width?: unknown }).width, 1);
           const ih = clampNumber((img as unknown as { height?: unknown }).height, 1);
-          const scale = Math.max(width / iw, height / ih);
-          const left = x + (width - iw * scale) / 2;
-          const top = y + (height - ih * scale) / 2;
+          const slotAspect = width / Math.max(1, height);
+          const imgAspect = iw / Math.max(1, ih);
+
+          let cropW = iw;
+          let cropH = ih;
+          let cropX = 0;
+          let cropY = 0;
+          if (imgAspect > slotAspect) {
+            // Wider than slot: crop horizontally.
+            cropW = Math.round(ih * slotAspect);
+            cropH = ih;
+            cropX = Math.round((iw - cropW) / 2);
+            cropY = 0;
+          } else if (imgAspect < slotAspect) {
+            // Taller than slot: crop vertically.
+            cropW = iw;
+            cropH = Math.round(iw / slotAspect);
+            cropX = 0;
+            cropY = Math.round((ih - cropH) / 2);
+          }
+
+          const scale = width / Math.max(1, cropW);
 
           img.set({
-            left,
-            top,
+            left: 0,
+            top: 0,
+            cropX,
+            cropY,
+            width: cropW,
+            height: cropH,
             scaleX: scale,
             scaleY: scale,
             selectable: false,
             evented: false
           });
-          setObjectId(img as unknown as FabricObject, id);
 
-          const clip = new Rect({
+          const frame = new Group([img], {
             left: x,
             top: y,
+            originX: "left",
+            originY: "top",
+            selectable: true,
+            evented: true,
+            hasControls: true,
+            hasBorders: true,
+            borderColor: "#7c3aed",
+            cornerStyle: "circle",
+            cornerColor: "#7c3aed",
+            transparentCorners: false
+          });
+          setObjectId(frame as unknown as FabricObject, id);
+          frame.clipPath = new Rect({
+            left: 0,
+            top: 0,
             width,
             height,
-            absolutePositioned: true,
             rx: 18,
             ry: 18
           });
-          (img as unknown as { clipPath?: unknown }).clipPath = clip;
 
-          canvas.add(img);
-          canvas.sendObjectToBack(img);
+          canvas.add(frame);
+          canvas.sendObjectToBack(frame);
           canvas.requestRenderAll();
         })
         .catch(() => {
