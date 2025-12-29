@@ -87,11 +87,6 @@ const FONT_FAMILIES: Array<{ value: string; label: string }> = [
   { value: "ui-serif, Georgia, serif", label: "Sistema (serif)" }
 ];
 
-const SIZE_OPTIONS = [
-  12, 14, 16, 18, 20, 22, 24, 28, 32, 34, 36, 40, 44, 48, 56, 64, 72, 88, 96,
-  112, 140
-];
-
 function clampNumber(value: unknown, fallback: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return value;
@@ -1291,57 +1286,38 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             ))}
           </select>
 
-          <div className="flex items-center gap-1">
-            <select
-              value={String(Math.round(textToolbar.fontSize))}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (!Number.isFinite(n)) return;
-                patchActiveText({ fontSize: n });
-                setFontSizeDraft(String(n));
-              }}
-              className="w-[86px] rounded-lg border bg-background px-2 py-1 text-xs"
-              title="Tamanhos sugeridos"
-            >
-              {SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n}px
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={1}
-              max={140}
-              step={1}
-              inputMode="numeric"
-              value={fontSizeDraft}
-              onFocus={() => setFontSizeFocused(true)}
-              onBlur={() => {
-                setFontSizeFocused(false);
-                const n = Number(fontSizeDraft);
-                if (!Number.isFinite(n)) {
-                  setFontSizeDraft(String(Math.round(textToolbar.fontSize)));
-                  return;
-                }
-                const clamped = Math.max(1, Math.min(140, Math.trunc(n)));
-                setFontSizeDraft(String(clamped));
-                patchActiveText({ fontSize: clamped });
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  (e.currentTarget as HTMLInputElement).blur();
-                  return;
-                }
-                if (e.key === "e" || e.key === "E" || e.key === "+" || e.key === "-" || e.key === ".") {
-                  e.preventDefault();
-                }
-              }}
-              onChange={(e) => setFontSizeDraft(e.target.value.replace(/[^0-9]/g, ""))}
-              className="w-[72px] rounded-lg border bg-background px-2 py-1 text-xs"
-              title="Tamanho (px)"
-            />
-          </div>
+          <input
+            type="number"
+            min={1}
+            max={140}
+            step={1}
+            inputMode="numeric"
+            value={fontSizeDraft}
+            onFocus={() => setFontSizeFocused(true)}
+            onBlur={() => {
+              setFontSizeFocused(false);
+              const n = Number(fontSizeDraft);
+              if (!Number.isFinite(n)) {
+                setFontSizeDraft(String(Math.round(textToolbar.fontSize)));
+                return;
+              }
+              const clamped = Math.max(1, Math.min(140, Math.trunc(n)));
+              setFontSizeDraft(String(clamped));
+              patchActiveText({ fontSize: clamped });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                (e.currentTarget as HTMLInputElement).blur();
+                return;
+              }
+              if (e.key === "e" || e.key === "E" || e.key === "+" || e.key === "-" || e.key === ".") {
+                e.preventDefault();
+              }
+            }}
+            onChange={(e) => setFontSizeDraft(e.target.value.replace(/[^0-9]/g, ""))}
+            className="w-[72px] rounded-lg border bg-background px-2 py-1 text-xs"
+            title="Tamanho (px)"
+          />
 
           <input
             type="color"

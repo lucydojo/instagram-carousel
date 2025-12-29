@@ -443,19 +443,19 @@ function Switch({
       role="switch"
       aria-checked={checked}
       onClick={() => onCheckedChange(!checked)}
-      className="flex items-center gap-3"
+      className="flex items-center justify-between gap-3"
     >
       <span className="text-sm text-muted-foreground">{label}</span>
       <span
         className={[
-          "relative h-6 w-11 rounded-full border transition-colors",
-          checked ? "bg-emerald-500 border-emerald-500" : "bg-muted/40 border-border"
+          "inline-flex h-6 w-11 items-center rounded-full border px-0.5 transition-colors",
+          checked ? "bg-emerald-500 border-emerald-500" : "bg-muted/40 border-border",
+          checked ? "justify-end" : "justify-start"
         ].join(" ")}
       >
         <span
           className={[
-            "absolute top-0.5 h-5 w-5 rounded-full bg-background shadow-sm transition-transform",
-            checked ? "translate-x-5" : "translate-x-0.5"
+            "h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform"
           ].join(" ")}
         />
       </span>
@@ -2462,8 +2462,6 @@ export default function StudioShell(props: Props) {
 
                 {showText ? (
                   <div className="space-y-3">
-                    <div className="text-sm font-semibold">Texto</div>
-
                     <div className="rounded-2xl border bg-background/80 p-4 shadow-sm">
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
                         <div className="flex items-start justify-between gap-3">
