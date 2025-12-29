@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Canvas, Textbox, type FabricObject } from "fabric";
+import { Canvas, Image, Rect, Textbox, type FabricObject } from "fabric";
 
 type SlideObjectV1 = {
   id?: string;
@@ -15,6 +15,8 @@ type SlideObjectV1 = {
   fontWeight?: number;
   fill?: string;
   textAlign?: "left" | "center" | "right" | "justify";
+  assetId?: string | null;
+  slotId?: string;
 };
 
 export type SlideV1 = {
@@ -78,17 +80,22 @@ function isAnyEditing(canvas: Canvas) {
 
 type Props = {
   slide: SlideV1;
+  assetUrlsById?: Record<string, string>;
   className?: string;
   renderKey: string | number;
   onSlideChange: (next: SlideV1) => void;
 };
 
 const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
-  function FabricSlideCanvas({ slide, className, renderKey, onSlideChange }, ref) {
+  function FabricSlideCanvas(
+    { slide, assetUrlsById, className, renderKey, onSlideChange },
+    ref
+  ) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasElRef = React.useRef<HTMLCanvasElement>(null);
   const fabricRef = React.useRef<Canvas | null>(null);
   const isHydratingRef = React.useRef(false);
+  const renderTokenRef = React.useRef(0);
   const emitTimerRef = React.useRef<number | null>(null);
   const nextSlideRef = React.useRef<SlideV1 | null>(null);
   const slideRef = React.useRef(slide);
@@ -288,7 +295,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     // current backstore size to avoid any DPR-specific artifacts.
     const base = Math.min(w, h);
     const multiplier = Math.max(0.1, targetSize / base);
-    return canvas.toDataURL({ format: "png", multiplier });
+    try {
+      return canvas.toDataURL({ format: "png", multiplier });
+    } catch {
+      return null;
+    }
   }, []);
 
   React.useImperativeHandle(
@@ -506,6 +517,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const canvas = fabricRef.current;
     if (!canvas) return;
 
+    const token = (renderTokenRef.current += 1);
     isHydratingRef.current = true;
     canvas.clear();
 
@@ -514,6 +526,65 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
     const slideW = clampNumber(slide.width, 1080);
 
+    // 1) Images (behind text)
+    for (const [idx, raw] of (slide.objects ?? []).entries()) {
+      if (!raw || typeof raw !== "object") continue;
+      if (raw.type !== "image") continue;
+
+      const id = raw.id ?? `obj_${idx + 1}`;
+      const assetId = typeof raw.assetId === "string" ? raw.assetId : null;
+      if (!assetId) continue;
+      const url = typeof assetUrlsById?.[assetId] === "string" ? assetUrlsById?.[assetId] : null;
+      if (!url) continue;
+
+      const x = clampNumber(raw.x, 0);
+      const y = clampNumber(raw.y, 0);
+      const width = clampNumber(raw.width, Math.max(1, slideW - 160));
+      const height = clampNumber(raw.height, Math.max(1, width));
+
+      Image.fromURL(url, { crossOrigin: "anonymous" })
+        .then((img) => {
+          // Ignore if we re-rendered since the request started.
+          if (renderTokenRef.current !== token) return;
+          if (!fabricRef.current) return;
+
+          const iw = clampNumber((img as unknown as { width?: unknown }).width, 1);
+          const ih = clampNumber((img as unknown as { height?: unknown }).height, 1);
+          const scale = Math.max(width / iw, height / ih);
+          const left = x + (width - iw * scale) / 2;
+          const top = y + (height - ih * scale) / 2;
+
+          img.set({
+            left,
+            top,
+            scaleX: scale,
+            scaleY: scale,
+            selectable: false,
+            evented: false
+          });
+          setObjectId(img as unknown as FabricObject, id);
+
+          const clip = new Rect({
+            left: x,
+            top: y,
+            width,
+            height,
+            absolutePositioned: true,
+            rx: 18,
+            ry: 18
+          });
+          (img as unknown as { clipPath?: unknown }).clipPath = clip;
+
+          canvas.add(img);
+          canvas.sendObjectToBack(img);
+          canvas.requestRenderAll();
+        })
+        .catch(() => {
+          // ignore load errors
+        });
+    }
+
+    // 2) Text
     for (const [idx, raw] of (slide.objects ?? []).entries()) {
       if (!raw || typeof raw !== "object") continue;
       if (raw.type !== "text") continue;
@@ -548,7 +619,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     fitCanvas();
     canvas.renderAll();
     isHydratingRef.current = false;
-  }, [fitCanvas, slide]);
+  }, [assetUrlsById, fitCanvas, slide]);
 
   React.useEffect(() => {
     renderSlide();

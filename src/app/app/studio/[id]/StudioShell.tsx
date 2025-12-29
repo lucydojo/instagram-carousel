@@ -346,6 +346,10 @@ export default function StudioShell(props: Props) {
   const [selectedSlideIndex, setSelectedSlideIndex] = React.useState(() =>
     clampInt(props.initialSlideIndex, 1, Math.max(1, props.slideCount))
   );
+  const [slotPicker, setSlotPicker] = React.useState<{
+    slideIndex: number;
+    slotId: string;
+  } | null>(null);
   const [dirty, setDirty] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = React.useState<string | null>(null);
@@ -434,6 +438,15 @@ export default function StudioShell(props: Props) {
   const slidesFromState = Array.isArray(editorState.slides)
     ? (editorState.slides as SlideLike[])
     : props.slides;
+  const assetUrlsById = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const a of [...props.assets.generated, ...props.assets.reference]) {
+      if (typeof a.id !== "string") continue;
+      if (typeof a.signedUrl !== "string" || !a.signedUrl) continue;
+      map[a.id] = a.signedUrl;
+    }
+    return map;
+  }, [props.assets.generated, props.assets.reference]);
   const selectedSlide =
     slidesFromState.length > 0 ? slidesFromState[selectedSlideIndex - 1] : null;
   const editorStateJson = React.useMemo(
@@ -902,6 +915,65 @@ export default function StudioShell(props: Props) {
       .map((img) => ({ id: img.id, bounds: img.bounds }));
   }, [canvasSlide.objects, effectiveTemplate.images]);
 
+  const assignAssetToSlot = React.useCallback(
+    (assetId: string) => {
+      if (!slotPicker) return;
+      const { slideIndex, slotId } = slotPicker;
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+
+        const idx = slideIndex - 1;
+        const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
+        if (!slide || typeof slide !== "object") return prev;
+        const slideObj = slide as Record<string, unknown>;
+        const w = typeof slideObj.width === "number" ? (slideObj.width as number) : 1080;
+        const h =
+          typeof slideObj.height === "number" ? (slideObj.height as number) : 1080;
+        const objects = Array.isArray(slideObj.objects)
+          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
+          : [];
+
+        let didSet = false;
+        const nextObjects = objects.map((o) => {
+          if (o.type !== "image") return o;
+          const oSlot = typeof o.slotId === "string" ? o.slotId : null;
+          if (oSlot !== slotId) return o;
+          didSet = true;
+          return { ...o, assetId };
+        });
+
+        if (!didSet) {
+          const slot = effectiveTemplate.images.find(
+            (img) => img.kind === "slot" && img.id === slotId
+          );
+          if (slot && slot.kind === "slot") {
+            const rect = rectToPx(slot.bounds, w, h);
+            nextObjects.push({
+              id: `image_${slotId}`,
+              type: "image",
+              slotId,
+              x: rect.x,
+              y: rect.y,
+              width: rect.w,
+              height: rect.h,
+              assetId
+            });
+          }
+        }
+
+        const nextSlide = { ...slideObj, objects: nextObjects };
+        prevSlides[idx] = nextSlide;
+        return { ...prev, slides: prevSlides };
+      });
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
+      setSlotPicker(null);
+    },
+    [effectiveTemplate.images, props.slides, slotPicker]
+  );
+
   const onCanvasSlideChange = React.useCallback(
     (nextSlide: SlideV1) => {
       setEditorState((prev) => {
@@ -1338,6 +1410,34 @@ export default function StudioShell(props: Props) {
                       </button>
                     </div>
 
+                    {slotPicker ? (
+                      <div className="rounded-xl border bg-background/70 p-3 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-muted-foreground">
+                            Selecionar imagem para o <span className="font-medium text-foreground">slot</span>{" "}
+                            <span className="rounded-md bg-secondary px-1.5 py-0.5 font-mono">
+                              {slotPicker.slotId}
+                            </span>{" "}
+                            (slide {slotPicker.slideIndex}).
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSlotPicker(null)}
+                            className="rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                        <div className="mt-2 text-muted-foreground">
+                          Clique em uma imagem abaixo para preencher o slot.
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border bg-background/70 p-3 text-xs text-muted-foreground">
+                        Dica: clique no placeholder verde do canvas para selecionar um slot de imagem.
+                      </div>
+                    )}
+
                     {assetsTab === "reference" ? (
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
@@ -1359,9 +1459,15 @@ export default function StudioShell(props: Props) {
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
                             {props.assets.reference.slice(0, 12).map((a) => (
-                              <div
+                              <button
                                 key={a.id}
-                                className="overflow-hidden rounded-xl bg-muted/30"
+                                type="button"
+                                disabled={!slotPicker || !a.signedUrl}
+                                onClick={() => {
+                                  if (!slotPicker) return;
+                                  assignAssetToSlot(a.id);
+                                }}
+                                className="overflow-hidden rounded-xl bg-muted/30 disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {a.signedUrl ? (
                                   // eslint-disable-next-line @next/next/no-img-element
@@ -1375,7 +1481,7 @@ export default function StudioShell(props: Props) {
                                     Sem preview
                                   </div>
                                 )}
-                              </div>
+                              </button>
                             ))}
                           </div>
                         )}
@@ -1389,9 +1495,15 @@ export default function StudioShell(props: Props) {
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
                             {props.assets.generated.slice(0, 12).map((a) => (
-                              <div
+                              <button
                                 key={a.id}
-                                className="overflow-hidden rounded-xl bg-muted/30"
+                                type="button"
+                                disabled={!slotPicker || !a.signedUrl}
+                                onClick={() => {
+                                  if (!slotPicker) return;
+                                  assignAssetToSlot(a.id);
+                                }}
+                                className="overflow-hidden rounded-xl bg-muted/30 disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {a.signedUrl ? (
                                   // eslint-disable-next-line @next/next/no-img-element
@@ -1405,7 +1517,7 @@ export default function StudioShell(props: Props) {
                                     Sem preview
                                   </div>
                                 )}
-                              </div>
+                              </button>
                             ))}
                           </div>
                         )}
@@ -1842,20 +1954,28 @@ export default function StudioShell(props: Props) {
                 <FabricSlideCanvas
                   ref={canvasApiRef}
                   slide={canvasSlide}
+                  assetUrlsById={assetUrlsById}
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}
                 />
                 {/* Image slot placeholders (template-driven) */}
                 {missingImageSlots.map((slot) => (
-                  <div
+                  <button
                     key={slot.id}
-                    className="pointer-events-none absolute z-20"
+                    type="button"
+                    className="absolute z-20"
                     style={rectToPct(slot.bounds)}
+                    onClick={() => {
+                      setSlotPicker({ slideIndex: selectedSlideIndex, slotId: slot.id });
+                      setActiveDock("assets");
+                      setAssetsTab("generated");
+                      setLeftOpen(true);
+                    }}
                   >
                     <div className="flex h-full w-full items-center justify-center rounded-2xl border-2 border-dashed border-emerald-400/70 bg-emerald-50/10 text-[11px] font-medium text-emerald-700">
                       Clique para adicionar imagem
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
