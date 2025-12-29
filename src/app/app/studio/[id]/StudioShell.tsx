@@ -923,27 +923,6 @@ export default function StudioShell(props: Props) {
       .map((img) => ({ id: img.id, bounds: img.bounds }));
   }, [canvasSlide.objects, effectiveTemplate.images]);
 
-  const placedImages = React.useMemo(() => {
-    const objects = canvasSlide.objects ?? [];
-    const w = canvasSlide.width || 1080;
-    const h = canvasSlide.height || 1080;
-    return (objects as unknown as Array<Record<string, unknown>>)
-      .filter((o) => o && o.type === "image")
-      .map((o) => {
-        const id = typeof o.id === "string" ? o.id : null;
-        const x = typeof o.x === "number" ? o.x : null;
-        const y = typeof o.y === "number" ? o.y : null;
-        const width = typeof o.width === "number" ? o.width : null;
-        const height = typeof o.height === "number" ? o.height : null;
-        const assetId = typeof o.assetId === "string" ? o.assetId : null;
-        if (!id || x == null || y == null || width == null || height == null || !assetId) {
-          return null;
-        }
-        return { id, bounds: { x: x / w, y: y / h, w: width / w, h: height / h } };
-      })
-      .filter((v): v is NonNullable<typeof v> => Boolean(v));
-  }, [canvasSlide.height, canvasSlide.objects, canvasSlide.width]);
-
   const assignAssetToSlot = React.useCallback(
     (assetId: string) => {
       if (!slotPicker) return;
@@ -2057,19 +2036,6 @@ export default function StudioShell(props: Props) {
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
                   onSlideChange={onCanvasSlideChange}
                 />
-                {/* Click-catcher overlays for images (ensures easy selection) */}
-                {placedImages.map((img) => (
-                  <button
-                    key={img.id}
-                    type="button"
-                    className="absolute z-20 rounded-2xl bg-transparent hover:outline hover:outline-2 hover:outline-primary/30"
-                    style={rectToPct(img.bounds)}
-                    onClick={() => {
-                      canvasApiRef.current?.selectById(img.id);
-                    }}
-                    aria-label="Selecionar imagem"
-                  />
-                ))}
                 {/* Image slot placeholders (template-driven) */}
                 {missingImageSlots.map((slot) => (
                   <button

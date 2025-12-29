@@ -424,19 +424,21 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       const rawObj = currentSlide.objects.find((o) => o?.id === id);
       if (rawObj?.type === "image") {
+        // Important: don't destructure Fabric methods like getScaledWidth/getScaledHeight.
+        // They depend on `this` and will throw if called unbound.
         const getScaledWidth = (target as unknown as { getScaledWidth?: () => number })
           .getScaledWidth;
         const getScaledHeight = (target as unknown as { getScaledHeight?: () => number })
           .getScaledHeight;
         const scaledWidth =
           typeof getScaledWidth === "function"
-            ? clampNumber(getScaledWidth(), 1)
+            ? clampNumber(getScaledWidth.call(target as unknown as object), 1)
             : typeof target.width === "number"
               ? Math.max(1, Math.round(target.width * scaleX))
               : 1;
         const scaledHeight =
           typeof getScaledHeight === "function"
-            ? clampNumber(getScaledHeight(), 1)
+            ? clampNumber(getScaledHeight.call(target as unknown as object), 1)
             : typeof target.height === "number"
               ? Math.max(1, Math.round(target.height * scaleY))
               : 1;
