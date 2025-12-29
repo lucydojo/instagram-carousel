@@ -20,6 +20,8 @@ type SlideObjectV1 = {
   fill?: string;
   textAlign?: "left" | "center" | "right" | "justify";
   fontStyle?: "normal" | "italic";
+  lineHeight?: number;
+  letterSpacing?: number; // px (UI-friendly); converted to Fabric `charSpacing`
   underline?: boolean;
   linethrough?: boolean;
   assetId?: string | null;
@@ -57,6 +59,14 @@ type StyleDefaults = {
     bodySize: number;
     ctaSize?: number;
     taglineSize?: number;
+    titleLineHeight?: number;
+    bodyLineHeight?: number;
+    ctaLineHeight?: number;
+    taglineLineHeight?: number;
+    titleSpacing?: number;
+    bodySpacing?: number;
+    ctaSpacing?: number;
+    taglineSpacing?: number;
   };
   palette?: { background: string; text: string; accent: string };
 };
@@ -85,6 +95,19 @@ const SIZE_OPTIONS = [
 function clampNumber(value: unknown, fallback: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return value;
+}
+
+function toFabricCharSpacing(letterSpacingPx: number | undefined, fontSize: number) {
+  if (typeof letterSpacingPx !== "number" || !Number.isFinite(letterSpacingPx)) return 0;
+  if (!Number.isFinite(fontSize) || fontSize <= 0) return 0;
+  return Math.round((letterSpacingPx / fontSize) * 1000);
+}
+
+function fromFabricCharSpacing(charSpacing: number | undefined, fontSize: number) {
+  if (typeof charSpacing !== "number" || !Number.isFinite(charSpacing)) return 0;
+  if (!Number.isFinite(fontSize) || fontSize <= 0) return 0;
+  // 1/1000 em → px
+  return (charSpacing / 1000) * fontSize;
 }
 
 function getObjectId(obj: FabricObject): string | null {
@@ -208,6 +231,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     textAlign: "left" | "center" | "right" | "justify";
   } | null>(null);
   const toolbarRafRef = React.useRef<number | null>(null);
+  const [fontSizeDraft, setFontSizeDraft] = React.useState<string>("");
+  const [fontSizeFocused, setFontSizeFocused] = React.useState(false);
 
   React.useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange ?? null;
@@ -284,16 +309,18 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const left = Math.max(8, Math.min(maxLeft, cssX));
     const top = Math.max(8, cssY - 54);
 
-    const any = active as unknown as {
-      fontFamily?: unknown;
-      fontSize?: unknown;
-      fill?: unknown;
-      fontWeight?: unknown;
-      fontStyle?: unknown;
-      underline?: unknown;
-      linethrough?: unknown;
-      textAlign?: unknown;
-    };
+      const any = active as unknown as {
+        fontFamily?: unknown;
+        fontSize?: unknown;
+        fill?: unknown;
+        fontWeight?: unknown;
+        fontStyle?: unknown;
+        lineHeight?: unknown;
+        charSpacing?: unknown;
+        underline?: unknown;
+        linethrough?: unknown;
+        textAlign?: unknown;
+      };
 
     const variant =
       getObjectVariant(active) ??
@@ -325,6 +352,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           ? any.textAlign
           : "left"
     });
+
+    if (!fontSizeFocused) {
+      setFontSizeDraft(String(Math.round(typeof any.fontSize === "number" ? any.fontSize : 34)));
+    }
   }, []);
 
   const scheduleToolbarUpdate = React.useCallback(() => {
@@ -345,6 +376,16 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const id = getObjectId(active);
       if (!id) return false;
 
+      const affectsLayout =
+        "fontFamily" in patch ||
+        "fontSize" in patch ||
+        "fontWeight" in patch ||
+        "fontStyle" in patch ||
+        "underline" in patch ||
+        "linethrough" in patch ||
+        "lineHeight" in patch ||
+        "letterSpacing" in patch;
+
       if (typeof patch.variant === "string") setObjectVariant(active, patch.variant);
 
       if (typeof patch.fontFamily === "string") {
@@ -364,6 +405,19 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       if (typeof patch.fontStyle === "string") {
         (active as unknown as { fontStyle?: "normal" | "italic" }).fontStyle = patch.fontStyle;
       }
+      if (typeof patch.lineHeight === "number") {
+        (active as unknown as { lineHeight?: number }).lineHeight = patch.lineHeight;
+      }
+      if (typeof patch.letterSpacing === "number") {
+        const size =
+          typeof (active as unknown as { fontSize?: unknown }).fontSize === "number"
+            ? (active as unknown as { fontSize: number }).fontSize
+            : 34;
+        (active as unknown as { charSpacing?: number }).charSpacing = toFabricCharSpacing(
+          patch.letterSpacing,
+          size
+        );
+      }
       if (typeof patch.underline === "boolean") {
         (active as unknown as { underline?: boolean }).underline = patch.underline;
       }
@@ -374,13 +428,30 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         (active as unknown as { textAlign?: SlideObjectV1["textAlign"] }).textAlign = patch.textAlign;
       }
 
+      if (affectsLayout) {
+        (active as unknown as { initDimensions?: () => void }).initDimensions?.();
+      }
       (active as unknown as { setCoords: () => void }).setCoords();
       canvas.requestRenderAll();
+
+      const normalizedHeight =
+        typeof (active as unknown as { height?: unknown }).height === "number"
+          ? Math.round((active as unknown as { height: number }).height)
+          : undefined;
+      const normalizedWidth =
+        typeof (active as unknown as { width?: unknown }).width === "number"
+          ? Math.round((active as unknown as { width: number }).width)
+          : undefined;
 
       const currentSlide = slideRef.current;
       const nextObjects = (currentSlide.objects ?? []).map((o) => {
         if (!o || o.id !== id) return o;
-        return { ...o, ...patch };
+        return {
+          ...o,
+          ...patch,
+          ...(typeof normalizedHeight === "number" ? { height: normalizedHeight } : null),
+          ...(typeof normalizedWidth === "number" ? { width: normalizedWidth } : null)
+        };
       });
       emit({ ...currentSlide, objects: nextObjects });
       scheduleToolbarUpdate();
@@ -417,6 +488,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       fontWeight: 600,
       fill,
       textAlign: "left",
+      lineHeight: 1.2,
+      charSpacing: 0,
       editable: true
     });
     textbox.initDimensions();
@@ -447,6 +520,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       fontSize,
       fontWeight: 600,
       fill,
+      lineHeight: 1.2,
+      letterSpacing: 0,
       textAlign: "left"
     };
     emit({ ...currentSlide, objects: [...(currentSlide.objects ?? []), nextObj] });
@@ -521,6 +596,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         fill: o.fill ?? "#111827",
         textAlign: o.textAlign ?? "left",
         fontStyle: o.fontStyle ?? "normal",
+        lineHeight: clampNumber(o.lineHeight, 1.2),
+        charSpacing: toFabricCharSpacing(
+          typeof o.letterSpacing === "number" ? o.letterSpacing : 0,
+          clampNumber(o.fontSize, 48)
+        ),
         underline: Boolean(o.underline),
         linethrough: Boolean(o.linethrough),
         editable: true
@@ -537,7 +617,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         x: Math.round(x),
         y: Math.round(y),
         width: Math.round(width),
-        height: typeof textbox.height === "number" ? Math.round(textbox.height) : o.height
+        height: typeof textbox.height === "number" ? Math.round(textbox.height) : o.height,
+        lineHeight: clampNumber(o.lineHeight, 1.2),
+        letterSpacing:
+          typeof o.letterSpacing === "number" ? o.letterSpacing : 0
       });
     }
 
@@ -800,6 +883,30 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           const fs = String((target as unknown as { fontStyle?: unknown }).fontStyle);
           if (fs === "normal" || fs === "italic") next.fontStyle = fs;
         }
+        if (
+          typeof (target as unknown as { lineHeight?: unknown }).lineHeight === "number"
+        ) {
+          next.lineHeight = clampNumber(
+            (target as unknown as { lineHeight?: unknown }).lineHeight,
+            next.lineHeight ?? 1.2
+          );
+        }
+        if (
+          typeof (target as unknown as { charSpacing?: unknown }).charSpacing === "number"
+        ) {
+          const cs = clampNumber(
+            (target as unknown as { charSpacing?: unknown }).charSpacing,
+            0
+          );
+          const fs =
+            typeof (target as unknown as { fontSize?: unknown }).fontSize === "number"
+              ? clampNumber(
+                  (target as unknown as { fontSize?: unknown }).fontSize,
+                  next.fontSize ?? 34
+                )
+              : next.fontSize ?? 34;
+          next.letterSpacing = fromFabricCharSpacing(cs, fs);
+        }
         next.underline = Boolean((target as unknown as { underline?: unknown }).underline);
         next.linethrough = Boolean(
           (target as unknown as { linethrough?: unknown }).linethrough
@@ -1049,6 +1156,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         fill: raw.fill ?? "#111827",
         textAlign: raw.textAlign ?? "left",
         fontStyle: raw.fontStyle ?? "normal",
+        lineHeight: clampNumber(raw.lineHeight, 1.2),
+        charSpacing: toFabricCharSpacing(
+          typeof raw.letterSpacing === "number" ? raw.letterSpacing : 0,
+          clampNumber(raw.fontSize, 56)
+        ),
         underline: Boolean(raw.underline),
         linethrough: Boolean(raw.linethrough),
         editable: true
@@ -1113,7 +1225,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                       fontFamily: typ?.titleFontFamily ?? textToolbar.fontFamily,
                       fontSize: typ?.titleSize ?? textToolbar.fontSize,
                       fill: pal?.accent ?? textToolbar.fill,
-                      fontWeight: 700
+                      fontWeight: 700,
+                      lineHeight: typ?.titleLineHeight ?? 1.1,
+                      letterSpacing: typ?.titleSpacing ?? 0
                     }
                   : variant === "cta"
                     ? {
@@ -1124,7 +1238,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                           textToolbar.fontFamily,
                         fontSize: typ?.ctaSize ?? textToolbar.fontSize,
                         fill: pal?.text ?? textToolbar.fill,
-                        fontWeight: 600
+                        fontWeight: 600,
+                        lineHeight: typ?.ctaLineHeight ?? 1.25,
+                        letterSpacing: typ?.ctaSpacing ?? 0
                       }
                     : variant === "tagline"
                       ? {
@@ -1135,7 +1251,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                             textToolbar.fontFamily,
                           fontSize: typ?.taglineSize ?? textToolbar.fontSize,
                           fill: pal?.text ?? textToolbar.fill,
-                          fontWeight: 600
+                          fontWeight: 600,
+                          lineHeight: typ?.taglineLineHeight ?? 1.25,
+                          letterSpacing: typ?.taglineSpacing ?? 0
                         }
                       : variant === "body"
                         ? {
@@ -1143,7 +1261,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                             fontFamily: typ?.bodyFontFamily ?? textToolbar.fontFamily,
                             fontSize: typ?.bodySize ?? textToolbar.fontSize,
                             fill: pal?.text ?? textToolbar.fill,
-                            fontWeight: 600
+                            fontWeight: 600,
+                            lineHeight: typ?.bodyLineHeight ?? 1.25,
+                            letterSpacing: typ?.bodySpacing ?? 0
                           }
                         : { variant };
               patchActiveText(applyPreset);
@@ -1171,24 +1291,57 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             ))}
           </select>
 
-          <select
-            value={String(Math.round(textToolbar.fontSize))}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              if (!Number.isFinite(n)) return;
-              patchActiveText({ fontSize: n });
-            }}
-            className="w-[84px] rounded-lg border bg-background px-2 py-1 text-xs"
-            title="Tamanho"
-          >
-            {Array.from(new Set([Math.round(textToolbar.fontSize), ...SIZE_OPTIONS])).map(
-              (n) => (
+          <div className="flex items-center gap-1">
+            <select
+              value={String(Math.round(textToolbar.fontSize))}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (!Number.isFinite(n)) return;
+                patchActiveText({ fontSize: n });
+                setFontSizeDraft(String(n));
+              }}
+              className="w-[86px] rounded-lg border bg-background px-2 py-1 text-xs"
+              title="Tamanhos sugeridos"
+            >
+              {SIZE_OPTIONS.map((n) => (
                 <option key={n} value={n}>
                   {n}px
                 </option>
-              )
-            )}
-          </select>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={1}
+              max={140}
+              step={1}
+              inputMode="numeric"
+              value={fontSizeDraft}
+              onFocus={() => setFontSizeFocused(true)}
+              onBlur={() => {
+                setFontSizeFocused(false);
+                const n = Number(fontSizeDraft);
+                if (!Number.isFinite(n)) {
+                  setFontSizeDraft(String(Math.round(textToolbar.fontSize)));
+                  return;
+                }
+                const clamped = Math.max(1, Math.min(140, Math.trunc(n)));
+                setFontSizeDraft(String(clamped));
+                patchActiveText({ fontSize: clamped });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.currentTarget as HTMLInputElement).blur();
+                  return;
+                }
+                if (e.key === "e" || e.key === "E" || e.key === "+" || e.key === "-" || e.key === ".") {
+                  e.preventDefault();
+                }
+              }}
+              onChange={(e) => setFontSizeDraft(e.target.value.replace(/[^0-9]/g, ""))}
+              className="w-[72px] rounded-lg border bg-background px-2 py-1 text-xs"
+              title="Tamanho (px)"
+            />
+          </div>
 
           <input
             type="color"

@@ -171,6 +171,14 @@ type TypographyV1 = {
   bodySize: number;
   taglineSize?: number;
   ctaSize?: number;
+  titleLineHeight?: number;
+  bodyLineHeight?: number;
+  taglineLineHeight?: number;
+  ctaLineHeight?: number;
+  titleSpacing?: number;
+  bodySpacing?: number;
+  taglineSpacing?: number;
+  ctaSpacing?: number;
 };
 
 type OverlayV1 = { enabled: boolean; opacity: number; color: string };
@@ -281,9 +289,17 @@ const FONT_PAIRS: FontOption[] = [
   { id: "spacegrotesk-inter", titleFont: "Space Grotesk", bodyFont: "Inter" },
   { id: "poppins-inter", titleFont: "Poppins", bodyFont: "Inter" },
   { id: "rubik-inter", titleFont: "Rubik", bodyFont: "Inter" },
+  { id: "playfair-poppins", titleFont: "Playfair Display", bodyFont: "Poppins" },
   { id: "playfair-inter", titleFont: "Playfair Display", bodyFont: "Inter" },
   { id: "merriweather-inter", titleFont: "Merriweather", bodyFont: "Inter" },
-  { id: "spacegrotesk-spacegrotesk", titleFont: "Space Grotesk", bodyFont: "Space Grotesk" }
+  { id: "merriweather-poppins", titleFont: "Merriweather", bodyFont: "Poppins" },
+  { id: "spacegrotesk-rubik", titleFont: "Space Grotesk", bodyFont: "Rubik" },
+  { id: "poppins-rubik", titleFont: "Poppins", bodyFont: "Rubik" },
+  { id: "rubik-poppins", titleFont: "Rubik", bodyFont: "Poppins" },
+  { id: "spacegrotesk-spacegrotesk", titleFont: "Space Grotesk", bodyFont: "Space Grotesk" },
+  { id: "poppins-poppins", titleFont: "Poppins", bodyFont: "Poppins" },
+  { id: "rubik-rubik", titleFont: "Rubik", bodyFont: "Rubik" },
+  { id: "spacemono-inter", titleFont: "Space Mono", bodyFont: "Inter" }
 ];
 
 function isTemplateDataV1(value: unknown): value is TemplateDataV1 {
@@ -325,6 +341,17 @@ function parseTypographyV1(value: unknown): TypographyV1 | null {
   const ctaFontFamily = typeof v.ctaFontFamily === "string" ? v.ctaFontFamily : undefined;
   const taglineFontFamily =
     typeof v.taglineFontFamily === "string" ? v.taglineFontFamily : undefined;
+  const titleLineHeight =
+    typeof v.titleLineHeight === "number" ? v.titleLineHeight : undefined;
+  const bodyLineHeight = typeof v.bodyLineHeight === "number" ? v.bodyLineHeight : undefined;
+  const taglineLineHeight =
+    typeof v.taglineLineHeight === "number" ? v.taglineLineHeight : undefined;
+  const ctaLineHeight = typeof v.ctaLineHeight === "number" ? v.ctaLineHeight : undefined;
+  const titleSpacing = typeof v.titleSpacing === "number" ? v.titleSpacing : undefined;
+  const bodySpacing = typeof v.bodySpacing === "number" ? v.bodySpacing : undefined;
+  const taglineSpacing =
+    typeof v.taglineSpacing === "number" ? v.taglineSpacing : undefined;
+  const ctaSpacing = typeof v.ctaSpacing === "number" ? v.ctaSpacing : undefined;
   return {
     titleFontFamily,
     bodyFontFamily,
@@ -333,7 +360,15 @@ function parseTypographyV1(value: unknown): TypographyV1 | null {
     titleSize,
     bodySize,
     taglineSize,
-    ctaSize
+    ctaSize,
+    titleLineHeight,
+    bodyLineHeight,
+    taglineLineHeight,
+    ctaLineHeight,
+    titleSpacing,
+    bodySpacing,
+    taglineSpacing,
+    ctaSpacing
   };
 }
 
@@ -391,6 +426,119 @@ function createStudioId(prefix: string) {
       ? crypto.randomUUID()
       : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
   return `${prefix}_${rand}`;
+}
+
+function Switch({
+  checked,
+  onCheckedChange,
+  label
+}: {
+  checked: boolean;
+  onCheckedChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onCheckedChange(!checked)}
+      className="flex items-center gap-3"
+    >
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span
+        className={[
+          "relative h-6 w-11 rounded-full border transition-colors",
+          checked ? "bg-emerald-500 border-emerald-500" : "bg-muted/40 border-border"
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "absolute top-0.5 h-5 w-5 rounded-full bg-background shadow-sm transition-transform",
+            checked ? "translate-x-5" : "translate-x-0.5"
+          ].join(" ")}
+        />
+      </span>
+    </button>
+  );
+}
+
+function preventExponentKey(e: React.KeyboardEvent<HTMLInputElement>) {
+  if (e.key === "e" || e.key === "E") e.preventDefault();
+}
+
+function NumericField(props: {
+  label: string;
+  value: number;
+  onCommit: (n: number) => void;
+  min: number;
+  max: number;
+  step: number;
+  allowDecimal?: boolean;
+  allowNegative?: boolean;
+}) {
+  const { label, value, onCommit, min, max, step, allowDecimal, allowNegative } = props;
+  const [draft, setDraft] = React.useState<string>(() => String(value));
+  const [focused, setFocused] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [focused, value]);
+
+  const commit = React.useCallback(() => {
+    setFocused(false);
+    if (draft.trim() === "") {
+      setDraft(String(value));
+      return;
+    }
+    const parsed = allowDecimal ? Number(draft) : Number.parseInt(draft, 10);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const nextRaw = allowDecimal ? parsed : Math.trunc(parsed);
+    const clamped = clampNumberRange(nextRaw, min, max);
+    setDraft(String(clamped));
+    onCommit(clamped);
+  }, [allowDecimal, draft, max, min, onCommit, value]);
+
+  const onChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const next = e.target.value;
+    const decimal = Boolean(allowDecimal);
+    const negative = Boolean(allowNegative);
+    const re = decimal
+      ? negative
+        ? /^-?\d*(\.\d*)?$/
+        : /^\d*(\.\d*)?$/
+      : negative
+        ? /^-?\d*$/
+        : /^\d*$/;
+    if (next === "" || re.test(next)) setDraft(next);
+  };
+
+  return (
+    <label className="space-y-1">
+      {label ? <div className="text-[11px] text-muted-foreground">{label}</div> : null}
+      <input
+        type="number"
+        value={draft}
+        min={min}
+        max={max}
+        step={step}
+        inputMode={allowDecimal || allowNegative ? "decimal" : "numeric"}
+        onKeyDown={(e) => {
+          preventExponentKey(e);
+          if (!allowNegative && e.key === "-") e.preventDefault();
+          if (!allowDecimal && e.key === ".") e.preventDefault();
+          if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+        }}
+        onFocus={() => setFocused(true)}
+        onBlur={commit}
+        onChange={onChange}
+        className="h-9 w-full rounded-lg border bg-background px-2 text-sm"
+      />
+    </label>
+  );
 }
 
 function PaletteSwatchButton(props: {
@@ -610,7 +758,15 @@ export default function StudioShell(props: Props) {
       titleSize: effectiveTemplate.defaults.typography.titleSize,
       bodySize: effectiveTemplate.defaults.typography.bodySize,
       taglineSize: effectiveTemplate.defaults.typography.taglineSize,
-      ctaSize: effectiveTemplate.defaults.typography.ctaSize
+      ctaSize: effectiveTemplate.defaults.typography.ctaSize,
+      titleLineHeight: effectiveTemplate.defaults.typography.lineHeightTight,
+      bodyLineHeight: effectiveTemplate.defaults.typography.lineHeightNormal,
+      taglineLineHeight: effectiveTemplate.defaults.typography.lineHeightNormal,
+      ctaLineHeight: effectiveTemplate.defaults.typography.lineHeightNormal,
+      titleSpacing: 0,
+      bodySpacing: 0,
+      taglineSpacing: 0,
+      ctaSpacing: 0
     } satisfies TypographyV1;
   }, [currentGlobal, effectiveTemplate.defaults.typography]);
 
@@ -631,30 +787,24 @@ export default function StudioShell(props: Props) {
     setFontPairId(matchedFontPairId);
   }, [matchedFontPairId]);
 
-  const [titleSizeDraft, setTitleSizeDraft] = React.useState(String(globalTypography.titleSize));
-  const [bodySizeDraft, setBodySizeDraft] = React.useState(String(globalTypography.bodySize));
-  const [ctaSizeDraft, setCtaSizeDraft] = React.useState(String(globalTypography.ctaSize ?? 28));
-  const [taglineSizeDraft, setTaglineSizeDraft] = React.useState(
-    String(globalTypography.taglineSize ?? 20)
-  );
-
-  const [titleSizeFocused, setTitleSizeFocused] = React.useState(false);
-  const [bodySizeFocused, setBodySizeFocused] = React.useState(false);
-  const [ctaSizeFocused, setCtaSizeFocused] = React.useState(false);
-  const [taglineSizeFocused, setTaglineSizeFocused] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!titleSizeFocused) setTitleSizeDraft(String(globalTypography.titleSize));
-  }, [globalTypography.titleSize, titleSizeFocused]);
-  React.useEffect(() => {
-    if (!bodySizeFocused) setBodySizeDraft(String(globalTypography.bodySize));
-  }, [bodySizeFocused, globalTypography.bodySize]);
-  React.useEffect(() => {
-    if (!ctaSizeFocused) setCtaSizeDraft(String(globalTypography.ctaSize ?? 28));
-  }, [ctaSizeFocused, globalTypography.ctaSize]);
-  React.useEffect(() => {
-    if (!taglineSizeFocused) setTaglineSizeDraft(String(globalTypography.taglineSize ?? 20));
-  }, [globalTypography.taglineSize, taglineSizeFocused]);
+  const baseTypography = React.useMemo(() => {
+    const baseFont = effectiveTemplate.defaults.typography.fontFamily;
+    const title = effectiveTemplate.defaults.typography.titleSize;
+    const body = effectiveTemplate.defaults.typography.bodySize;
+    const cta =
+      effectiveTemplate.defaults.typography.ctaSize ?? Math.max(14, Math.round(body * 0.82));
+    const tagline =
+      effectiveTemplate.defaults.typography.taglineSize ?? Math.max(14, Math.round(body * 0.6));
+    return {
+      baseFont,
+      title,
+      body,
+      cta,
+      tagline,
+      lineHeightTight: effectiveTemplate.defaults.typography.lineHeightTight,
+      lineHeightNormal: effectiveTemplate.defaults.typography.lineHeightNormal
+    };
+  }, [effectiveTemplate.defaults.typography]);
 
   const globalOverlay = React.useMemo((): OverlayV1 => {
     const g = (currentGlobal as Record<string, unknown>).background;
@@ -960,12 +1110,36 @@ export default function StudioShell(props: Props) {
                     : key === "tagline"
                       ? typography.taglineFontFamily ?? typography.bodyFontFamily
                       : typography.bodyFontFamily;
+
+            const nextLineHeight =
+              key === "title"
+                ? typography.titleLineHeight
+                : key === "body"
+                  ? typography.bodyLineHeight
+                  : key === "cta"
+                    ? typography.ctaLineHeight
+                    : key === "tagline"
+                      ? typography.taglineLineHeight
+                      : undefined;
+            const nextSpacing =
+              key === "title"
+                ? typography.titleSpacing
+                : key === "body"
+                  ? typography.bodySpacing
+                  : key === "cta"
+                    ? typography.ctaSpacing
+                    : key === "tagline"
+                      ? typography.taglineSpacing
+                      : undefined;
             return {
               ...o,
               fontFamily: nextFontFamily,
               ...(typeof nextFontSize === "number"
                 ? { fontSize: nextFontSize }
                 : null)
+              ,
+              ...(typeof nextLineHeight === "number" ? { lineHeight: nextLineHeight } : null),
+              ...(typeof nextSpacing === "number" ? { letterSpacing: nextSpacing } : null)
             };
           });
           return { ...slideObj, objects: nextObjects };
@@ -2291,17 +2465,34 @@ export default function StudioShell(props: Props) {
                     <div className="text-sm font-semibold">Texto</div>
 
                     <div className="rounded-2xl border bg-background/80 p-4 shadow-sm">
-                      <div className="text-xs text-muted-foreground">
-                        Tipografia global (aplica em todos os slides).
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2 text-xs font-semibold">
+                              Upload de fontes customizadas
+                              <span className="rounded-md bg-emerald-200/70 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900">
+                                NEW
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              Em breve: envie arquivos .ttf/.otf e crie seus próprios pareamentos.
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled
+                          className="mt-3 w-full rounded-xl bg-emerald-700 px-3 py-2 text-sm font-semibold text-white opacity-70"
+                        >
+                          Em breve
+                        </button>
                       </div>
 
-                      <div className="mt-4 space-y-4">
-                        {/* Font Pair */}
-                        {!customPairingEnabled ? (
-                          <div className="space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground">
-                              Par de fontes
-                            </div>
+                      <div className="mt-4 space-y-5">
+                        <div className="space-y-3">
+                          <div className="text-sm font-medium">Par de fontes</div>
+
+                          {!customPairingEnabled ? (
                             <select
                               value={fontPairId}
                               onChange={(e) => {
@@ -2325,19 +2516,13 @@ export default function StudioShell(props: Props) {
                                 </option>
                               ))}
                             </select>
-                          </div>
-                        ) : null}
+                          ) : null}
 
-                        <label className="flex items-center justify-between gap-3 text-sm">
-                          <div className="text-[11px] font-medium text-muted-foreground">
-                            Personalizar pareamento
-                          </div>
-                          <input
-                            type="checkbox"
+                          <Switch
                             checked={customPairingEnabled}
-                            onChange={(e) => {
-                              setCustomPairingEnabled(e.target.checked);
-                              if (!e.target.checked) {
+                            onCheckedChange={(next) => {
+                              setCustomPairingEnabled(next);
+                              if (!next) {
                                 const pair = FONT_PAIRS.find((p) => p.id === fontPairId) ?? null;
                                 if (!pair) return;
                                 applyTypography({
@@ -2349,233 +2534,249 @@ export default function StudioShell(props: Props) {
                                 });
                               }
                             }}
+                            label="Personalizar pareamento"
                           />
-                        </label>
 
-                        {customPairingEnabled ? (
-                          <div className="grid grid-cols-2 gap-3">
-                            <label className="space-y-1">
-                              <div className="text-[11px] text-muted-foreground">
-                                Fonte do título
-                              </div>
-                              <select
-                                value={globalTypography.titleFontFamily}
-                                onChange={(e) =>
-                                  applyTypography({
-                                    ...globalTypography,
-                                    titleFontFamily: e.target.value
-                                  })
-                                }
-                                className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                              >
-                                {FONT_FAMILIES.map((f) => (
-                                  <option key={f.label} value={f.value}>
-                                    {f.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="space-y-1">
-                              <div className="text-[11px] text-muted-foreground">
-                                Fonte do corpo
-                              </div>
-                              <select
-                                value={globalTypography.bodyFontFamily}
-                                onChange={(e) =>
-                                  applyTypography({
-                                    ...globalTypography,
-                                    bodyFontFamily: e.target.value
-                                  })
-                                }
-                                className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                              >
-                                {FONT_FAMILIES.map((f) => (
-                                  <option key={f.label} value={f.value}>
-                                    {f.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          </div>
-                        ) : null}
-
-                        {/* Font Size */}
-                        <div className="space-y-2">
-                          <div className="text-[11px] font-medium text-muted-foreground">
-                            Tamanho
-                          </div>
-
-                          {!customSizesEnabled ? (
-                            <div className="flex items-center gap-2">
-                              {[
-                                {
-                                  id: "sm",
-                                  label: "Pequeno",
-                                  sizes: { title: 56, body: 28, cta: 24, tagline: 18 }
-                                },
-                                {
-                                  id: "md",
-                                  label: "Médio",
-                                  sizes: { title: 72, body: 34, cta: 28, tagline: 20 }
-                                },
-                                {
-                                  id: "lg",
-                                  label: "Grande",
-                                  sizes: { title: 88, body: 40, cta: 34, tagline: 24 }
-                                }
-                              ].map((p) => (
-                                <button
-                                  key={p.id}
-                                  type="button"
-                                  onClick={() => {
-                                    applyTypography({
-                                      ...globalTypography,
-                                      titleSize: p.sizes.title,
-                                      bodySize: p.sizes.body,
-                                      ctaSize: p.sizes.cta,
-                                      taglineSize: p.sizes.tagline
-                                    });
-                                    setTitleSizeDraft(String(p.sizes.title));
-                                    setBodySizeDraft(String(p.sizes.body));
-                                    setCtaSizeDraft(String(p.sizes.cta));
-                                    setTaglineSizeDraft(String(p.sizes.tagline));
-                                  }}
-                                  className="flex items-center gap-2 rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
-                                >
-                                  <span className="rounded-lg border bg-muted/40 px-2 py-1 font-semibold">
-                                    Aa
-                                  </span>
-                                  {p.label}
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          <label className="flex items-center justify-between gap-3 text-sm">
-                            <div className="text-[11px] font-medium text-muted-foreground">
-                              Tamanhos personalizados
-                            </div>
-                            <input
-                              type="checkbox"
-                              checked={customSizesEnabled}
-                              onChange={(e) => setCustomSizesEnabled(e.target.checked)}
-                            />
-                          </label>
-
-                          {customSizesEnabled ? (
+                          {customPairingEnabled ? (
                             <div className="grid grid-cols-2 gap-3">
                               <label className="space-y-1">
                                 <div className="text-[11px] text-muted-foreground">
-                                  Título (px)
+                                  Fonte do título
                                 </div>
-                                <input
-                                  inputMode="numeric"
-                                  value={titleSizeDraft}
-                                  onFocus={() => setTitleSizeFocused(true)}
-                                  onBlur={() => {
-                                    setTitleSizeFocused(false);
-                                    const n = Number(titleSizeDraft);
-                                    if (!Number.isFinite(n)) {
-                                      setTitleSizeDraft(String(globalTypography.titleSize));
-                                      return;
-                                    }
+                                <select
+                                  value={globalTypography.titleFontFamily}
+                                  onChange={(e) =>
                                     applyTypography({
                                       ...globalTypography,
-                                      titleSize: clampNumberRange(Math.trunc(n), 24, 140)
-                                    });
-                                  }}
-                                  onChange={(e) => setTitleSizeDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key !== "Enter") return;
-                                    (e.currentTarget as HTMLInputElement).blur();
-                                  }}
+                                      titleFontFamily: e.target.value
+                                    })
+                                  }
                                   className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                                />
+                                >
+                                  {FONT_FAMILIES.map((f) => (
+                                    <option key={f.label} value={f.value}>
+                                      {f.label}
+                                    </option>
+                                  ))}
+                                </select>
                               </label>
                               <label className="space-y-1">
                                 <div className="text-[11px] text-muted-foreground">
-                                  Corpo (px)
+                                  Fonte do corpo
                                 </div>
-                                <input
-                                  inputMode="numeric"
-                                  value={bodySizeDraft}
-                                  onFocus={() => setBodySizeFocused(true)}
-                                  onBlur={() => {
-                                    setBodySizeFocused(false);
-                                    const n = Number(bodySizeDraft);
-                                    if (!Number.isFinite(n)) {
-                                      setBodySizeDraft(String(globalTypography.bodySize));
-                                      return;
-                                    }
+                                <select
+                                  value={globalTypography.bodyFontFamily}
+                                  onChange={(e) =>
                                     applyTypography({
                                       ...globalTypography,
-                                      bodySize: clampNumberRange(Math.trunc(n), 16, 72)
-                                    });
-                                  }}
-                                  onChange={(e) => setBodySizeDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key !== "Enter") return;
-                                    (e.currentTarget as HTMLInputElement).blur();
-                                  }}
+                                      bodyFontFamily: e.target.value
+                                    })
+                                  }
                                   className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                                />
+                                >
+                                  {FONT_FAMILIES.map((f) => (
+                                    <option key={f.label} value={f.value}>
+                                      {f.label}
+                                    </option>
+                                  ))}
+                                </select>
                               </label>
-                              <label className="space-y-1">
-                                <div className="text-[11px] text-muted-foreground">
-                                  CTA (px)
-                                </div>
-                                <input
-                                  inputMode="numeric"
-                                  value={ctaSizeDraft}
-                                  onFocus={() => setCtaSizeFocused(true)}
-                                  onBlur={() => {
-                                    setCtaSizeFocused(false);
-                                    const n = Number(ctaSizeDraft);
-                                    if (!Number.isFinite(n)) {
-                                      setCtaSizeDraft(String(globalTypography.ctaSize ?? 28));
-                                      return;
-                                    }
-                                    applyTypography({
-                                      ...globalTypography,
-                                      ctaSize: clampNumberRange(Math.trunc(n), 14, 60)
-                                    });
-                                  }}
-                                  onChange={(e) => setCtaSizeDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key !== "Enter") return;
-                                    (e.currentTarget as HTMLInputElement).blur();
-                                  }}
-                                  className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                                />
-                              </label>
-                              <label className="space-y-1">
-                                <div className="text-[11px] text-muted-foreground">
-                                  Tagline (px)
-                                </div>
-                                <input
-                                  inputMode="numeric"
-                                  value={taglineSizeDraft}
-                                  onFocus={() => setTaglineSizeFocused(true)}
-                                  onBlur={() => {
-                                    setTaglineSizeFocused(false);
-                                    const n = Number(taglineSizeDraft);
-                                    if (!Number.isFinite(n)) {
-                                      setTaglineSizeDraft(String(globalTypography.taglineSize ?? 20));
-                                      return;
-                                    }
-                                    applyTypography({
-                                      ...globalTypography,
-                                      taglineSize: clampNumberRange(Math.trunc(n), 12, 48)
-                                    });
-                                  }}
-                                  onChange={(e) => setTaglineSizeDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key !== "Enter") return;
-                                    (e.currentTarget as HTMLInputElement).blur();
-                                  }}
-                                  className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                                />
-                              </label>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="text-sm font-medium">Tamanho</div>
+
+                          {(() => {
+                            const ratio =
+                              baseTypography.title > 0
+                                ? globalTypography.titleSize / baseTypography.title
+                                : 1;
+                            const preset =
+                              ratio < 0.93 ? "sm" : ratio > 1.07 ? "lg" : "md";
+                            const presets = [
+                              { id: "sm", title: "Pequeno", scale: 0.85, iconClass: "text-xs" },
+                              { id: "md", title: "Médio", scale: 1.0, iconClass: "text-sm" },
+                              { id: "lg", title: "Grande", scale: 1.15, iconClass: "text-base" }
+                            ] as const;
+                            return (
+                              <div className="flex items-center gap-2">
+                                {presets.map((p) => (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    title={p.title}
+                                    onClick={() => {
+                                      const nextTitle = clampNumberRange(
+                                        Math.round(baseTypography.title * p.scale),
+                                        24,
+                                        140
+                                      );
+                                      const nextBody = clampNumberRange(
+                                        Math.round(baseTypography.body * p.scale),
+                                        12,
+                                        80
+                                      );
+                                      const nextCta = clampNumberRange(
+                                        Math.round(baseTypography.cta * p.scale),
+                                        12,
+                                        80
+                                      );
+                                      const nextTagline = clampNumberRange(
+                                        Math.round(baseTypography.tagline * p.scale),
+                                        10,
+                                        64
+                                      );
+                                      applyTypography({
+                                        ...globalTypography,
+                                        titleSize: nextTitle,
+                                        bodySize: nextBody,
+                                        ctaSize: nextCta,
+                                        taglineSize: nextTagline
+                                      });
+                                    }}
+                                    className={[
+                                      "flex h-10 w-10 items-center justify-center rounded-xl border bg-background transition hover:bg-secondary",
+                                      preset === p.id ? "border-foreground/40" : ""
+                                    ].join(" ")}
+                                  >
+                                    <span className={["font-semibold", p.iconClass].join(" ")}>
+                                      Aa
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
+
+                          <Switch
+                            checked={customSizesEnabled}
+                            onCheckedChange={setCustomSizesEnabled}
+                            label="Tamanhos personalizados"
+                          />
+
+                          {customSizesEnabled ? (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+                                <div>Tamanho (px)</div>
+                                <div>Altura</div>
+                                <div>Espaçamento (px)</div>
+                              </div>
+
+                              {(() => {
+                                type SizeKey = "taglineSize" | "titleSize" | "bodySize" | "ctaSize";
+                                type HeightKey =
+                                  | "taglineLineHeight"
+                                  | "titleLineHeight"
+                                  | "bodyLineHeight"
+                                  | "ctaLineHeight";
+                                type SpacingKey =
+                                  | "taglineSpacing"
+                                  | "titleSpacing"
+                                  | "bodySpacing"
+                                  | "ctaSpacing";
+
+                                type Row = {
+                                  label: string;
+                                  sizeKey: SizeKey;
+                                  heightKey: HeightKey;
+                                  spacingKey: SpacingKey;
+                                };
+
+                                const rows: Row[] = [
+                                  {
+                                    label: "Subtítulo",
+                                    sizeKey: "taglineSize",
+                                    heightKey: "taglineLineHeight",
+                                    spacingKey: "taglineSpacing"
+                                  },
+                                  {
+                                    label: "Título",
+                                    sizeKey: "titleSize",
+                                    heightKey: "titleLineHeight",
+                                    spacingKey: "titleSpacing"
+                                  },
+                                  {
+                                    label: "Descrição",
+                                    sizeKey: "bodySize",
+                                    heightKey: "bodyLineHeight",
+                                    spacingKey: "bodySpacing"
+                                  },
+                                  {
+                                    label: "CTA",
+                                    sizeKey: "ctaSize",
+                                    heightKey: "ctaLineHeight",
+                                    spacingKey: "ctaSpacing"
+                                  }
+                                ];
+
+                                const setField = <K extends keyof TypographyV1>(
+                                  key: K,
+                                  value: TypographyV1[K]
+                                ) => ({ ...globalTypography, [key]: value } satisfies TypographyV1);
+
+                                return rows.map((row) => {
+                                  const sizeValue =
+                                    globalTypography[row.sizeKey] ??
+                                    (row.sizeKey === "taglineSize"
+                                      ? Math.max(12, Math.round(globalTypography.bodySize * 0.6))
+                                      : row.sizeKey === "ctaSize"
+                                        ? 28
+                                        : 32);
+                                  const heightValue =
+                                    globalTypography[row.heightKey] ??
+                                    (row.heightKey === "titleLineHeight"
+                                      ? baseTypography.lineHeightTight
+                                      : baseTypography.lineHeightNormal);
+                                  const spacingValue = globalTypography[row.spacingKey] ?? 0;
+
+                                return (
+                                  <div key={row.label} className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <div className="h-px flex-1 bg-border" />
+                                      <div className="text-[11px] font-medium text-muted-foreground">
+                                        {row.label}
+                                      </div>
+                                      <div className="h-px flex-1 bg-border" />
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <NumericField
+                                        label=""
+                                        value={Number(sizeValue)}
+                                        onCommit={(n) =>
+                                          applyTypography(
+                                            setField(row.sizeKey, Math.trunc(n))
+                                          )
+                                        }
+                                        min={1}
+                                        max={140}
+                                        step={1}
+                                      />
+                                      <NumericField
+                                        label=""
+                                        value={Number(heightValue)}
+                                        onCommit={(n) => applyTypography(setField(row.heightKey, n))}
+                                        min={0.8}
+                                        max={2.2}
+                                        step={0.05}
+                                        allowDecimal
+                                      />
+                                      <NumericField
+                                        label=""
+                                        value={Number(spacingValue)}
+                                        onCommit={(n) => applyTypography(setField(row.spacingKey, n))}
+                                        min={-10}
+                                        max={10}
+                                        step={0.25}
+                                        allowDecimal
+                                        allowNegative
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                                });
+                              })()}
                             </div>
                           ) : null}
                         </div>
@@ -2598,10 +2799,18 @@ export default function StudioShell(props: Props) {
                               bodyFontFamily: baseFont,
                               ctaFontFamily: undefined,
                               taglineFontFamily: undefined,
-                              titleSize: effectiveTemplate.defaults.typography.titleSize,
-                              bodySize: effectiveTemplate.defaults.typography.bodySize,
-                              taglineSize: effectiveTemplate.defaults.typography.taglineSize,
-                              ctaSize: effectiveTemplate.defaults.typography.ctaSize
+                              titleSize: baseTypography.title,
+                              bodySize: baseTypography.body,
+                              taglineSize: baseTypography.tagline,
+                              ctaSize: baseTypography.cta,
+                              titleLineHeight: baseTypography.lineHeightTight,
+                              bodyLineHeight: baseTypography.lineHeightNormal,
+                              taglineLineHeight: baseTypography.lineHeightNormal,
+                              ctaLineHeight: baseTypography.lineHeightNormal,
+                              titleSpacing: 0,
+                              bodySpacing: 0,
+                              taglineSpacing: 0,
+                              ctaSpacing: 0
                             });
                           }}
                           className="w-full rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
@@ -2611,16 +2820,13 @@ export default function StudioShell(props: Props) {
                       </div>
                     </div>
 
-                    <div className="space-y-3 text-xs text-muted-foreground">
-                      <button
-                        type="button"
-                        onClick={() => canvasApiRef.current?.addText()}
-                        className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary"
-                      >
-                        Adicionar texto{" "}
-                        <span className="font-mono text-xs text-muted-foreground">(T)</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => canvasApiRef.current?.addText()}
+                      className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary"
+                    >
+                      Adicionar texto
+                    </button>
                   </div>
                 ) : null}
 
