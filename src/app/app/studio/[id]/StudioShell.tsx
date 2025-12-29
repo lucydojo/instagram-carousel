@@ -720,25 +720,34 @@ export default function StudioShell(props: Props) {
     return result.id;
   }, [customPalette]);
 
-  const renamePalette = React.useCallback(
-    async (id: string) => {
+  const [paletteRenameDraft, setPaletteRenameDraft] = React.useState<{
+    id: string | null;
+    name: string;
+  }>({ id: null, name: "" });
+
+  const startRenamePalette = React.useCallback(
+    (id: string) => {
       const current = paletteOptions.find((p) => p.id === id);
       if (!current || current.is_global) return;
-      const nextName = window.prompt("Novo nome da paleta:", current.name);
-      if (!nextName) return;
-      const trimmed = nextName.trim();
-      if (!trimmed) return;
-      const result = await studioRenamePalette({ id, name: trimmed });
-      if (!result.ok) {
-        setSaveError("Não foi possível renomear a paleta.");
-        return;
-      }
-      setPaletteOptions((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, name: trimmed } : p))
-      );
+      setPaletteRenameDraft({ id, name: current.name });
     },
     [paletteOptions]
   );
+
+  const commitRenamePalette = React.useCallback(async () => {
+    const id = paletteRenameDraft.id;
+    const name = paletteRenameDraft.name.trim();
+    if (!id || !name) return;
+    const current = paletteOptions.find((p) => p.id === id);
+    if (!current || current.is_global) return;
+    const result = await studioRenamePalette({ id, name });
+    if (!result.ok) {
+      setSaveError("Não foi possível renomear a paleta.");
+      return;
+    }
+    setPaletteOptions((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
+    setPaletteRenameDraft({ id: null, name: "" });
+  }, [paletteOptions, paletteRenameDraft.id, paletteRenameDraft.name]);
 
   const deletePalette = React.useCallback(
     async (id: string) => {
@@ -1599,7 +1608,7 @@ export default function StudioShell(props: Props) {
                                           type="button"
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            void renamePalette(p.id);
+                                            startRenamePalette(p.id);
                                           }}
                                           className="rounded-lg border bg-background/90 p-1 shadow-sm hover:bg-secondary"
                                           aria-label="Renomear paleta"
@@ -1626,6 +1635,46 @@ export default function StudioShell(props: Props) {
                               })}
                             </div>
                           )}
+
+                          {paletteRenameDraft.id ? (
+                            <div className="mt-3 rounded-xl border bg-background p-2">
+                              <div className="text-[11px] font-medium text-muted-foreground">
+                                Renomear paleta
+                              </div>
+                              <div className="mt-2 flex items-center gap-2">
+                                <input
+                                  value={paletteRenameDraft.name}
+                                  onChange={(e) =>
+                                    setPaletteRenameDraft((prev) => ({
+                                      ...prev,
+                                      name: e.target.value
+                                    }))
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") void commitRenamePalette();
+                                    if (e.key === "Escape")
+                                      setPaletteRenameDraft({ id: null, name: "" });
+                                  }}
+                                  className="h-9 flex-1 rounded-lg border bg-background px-2 text-sm"
+                                  placeholder="Nome da paleta"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => void commitRenamePalette()}
+                                  className="h-9 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                                >
+                                  Salvar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPaletteRenameDraft({ id: null, name: "" })}
+                                  className="h-9 rounded-lg border bg-background px-3 text-sm hover:bg-secondary"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
 
                         <div className="rounded-xl border bg-background/70 p-3">
