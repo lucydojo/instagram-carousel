@@ -2221,8 +2221,6 @@ export default function StudioShell(props: Props) {
 
                 {showColors ? (
                   <div className="space-y-3">
-                    <div className="text-sm font-semibold">Cores</div>
-
                     {/* Custom palette (always available) */}
                     <div className="rounded-xl border bg-background/70 p-3">
                       <div className="flex items-center justify-between">
