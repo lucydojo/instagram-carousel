@@ -157,11 +157,20 @@ type TemplateDataV1 = {
       lineHeightNormal?: number;
     };
     spacing: { padding: number };
-    background: { overlay?: { enabled: boolean; opacity: number } };
+    background: { overlay?: { enabled: boolean; opacity: number; color?: string } };
   };
 };
 
 type PaletteV1 = { background: string; text: string; accent: string };
+type TypographyV1 = {
+  fontFamily: string;
+  titleSize: number;
+  bodySize: number;
+  taglineSize?: number;
+  ctaSize?: number;
+};
+
+type OverlayV1 = { enabled: boolean; opacity: number; color: string };
 
 type PaletteOption = {
   id: string;
@@ -208,7 +217,7 @@ const BUILTIN_TEMPLATES: TemplateDataV1[] = [
         lineHeightNormal: 1.25
       },
       spacing: { padding: 80 },
-      background: { overlay: { enabled: true, opacity: 0.35 } }
+      background: { overlay: { enabled: true, opacity: 0.35, color: "#000000" } }
     }
   },
   {
@@ -260,6 +269,25 @@ function parsePaletteV1(value: unknown): PaletteV1 | null {
   const accent = typeof v.accent === "string" ? v.accent : null;
   if (!background || !text || !accent) return null;
   return { background, text, accent };
+}
+
+function parseTypographyV1(value: unknown): TypographyV1 | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const fontFamily = typeof v.fontFamily === "string" ? v.fontFamily : null;
+  const titleSize = typeof v.titleSize === "number" ? v.titleSize : null;
+  const bodySize = typeof v.bodySize === "number" ? v.bodySize : null;
+  if (!fontFamily || !titleSize || !bodySize) return null;
+  const taglineSize = typeof v.taglineSize === "number" ? v.taglineSize : undefined;
+  const ctaSize = typeof v.ctaSize === "number" ? v.ctaSize : undefined;
+  return { fontFamily, titleSize, bodySize, taglineSize, ctaSize };
+}
+
+function clampNumberRange(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
 }
 
 function parsePaletteOptionsFromProps(
@@ -518,6 +546,46 @@ export default function StudioShell(props: Props) {
     return found ?? BUILTIN_TEMPLATES[0]!;
   }, [currentGlobal.templateData, selectedTemplateId, templateOptions]);
 
+  const globalTypography = React.useMemo(() => {
+    const fromGlobal = parseTypographyV1((currentGlobal as Record<string, unknown>).typography);
+    if (fromGlobal) return fromGlobal;
+    return {
+      fontFamily: effectiveTemplate.defaults.typography.fontFamily,
+      titleSize: effectiveTemplate.defaults.typography.titleSize,
+      bodySize: effectiveTemplate.defaults.typography.bodySize,
+      taglineSize: effectiveTemplate.defaults.typography.taglineSize,
+      ctaSize: effectiveTemplate.defaults.typography.ctaSize
+    } satisfies TypographyV1;
+  }, [currentGlobal, effectiveTemplate.defaults.typography]);
+
+  const globalOverlay = React.useMemo((): OverlayV1 => {
+    const g = (currentGlobal as Record<string, unknown>).background;
+    const bg = g && typeof g === "object" ? (g as Record<string, unknown>) : {};
+    const hasOverlay = Boolean(bg.overlay);
+    const ov =
+      bg.overlay && typeof bg.overlay === "object"
+        ? (bg.overlay as Record<string, unknown>)
+        : {};
+
+    const templateOv = effectiveTemplate.defaults.background.overlay;
+    const fallbackEnabled =
+      templateOv && typeof templateOv.enabled === "boolean" ? templateOv.enabled : false;
+    const fallbackOpacity =
+      templateOv && typeof templateOv.opacity === "number" && Number.isFinite(templateOv.opacity)
+        ? clampNumberRange(templateOv.opacity, 0, 0.95)
+        : 0.35;
+    const fallbackColor =
+      templateOv && typeof templateOv.color === "string" ? templateOv.color : "#000000";
+
+    const enabled = hasOverlay ? Boolean(ov.enabled) : fallbackEnabled;
+    const opacity =
+      typeof ov.opacity === "number" && Number.isFinite(ov.opacity)
+        ? clampNumberRange(ov.opacity, 0, 0.95)
+        : fallbackOpacity;
+    const color = typeof ov.color === "string" ? ov.color : fallbackColor;
+    return { enabled, opacity, color };
+  }, [currentGlobal, effectiveTemplate.defaults.background.overlay]);
+
   const [paletteOptions, setPaletteOptions] = React.useState<PaletteOption[]>(() =>
     parsePaletteOptionsFromProps(props.palettes)
   );
@@ -571,6 +639,19 @@ export default function StudioShell(props: Props) {
           ? ([...(prev.slides as SlideLike[])] as SlideLike[])
           : [...props.slides];
 
+        const templateOverlay: OverlayV1 = {
+          enabled: Boolean(template.defaults.background.overlay?.enabled),
+          opacity:
+            typeof template.defaults.background.overlay?.opacity === "number" &&
+            Number.isFinite(template.defaults.background.overlay.opacity)
+              ? clampNumberRange(template.defaults.background.overlay.opacity, 0, 0.95)
+              : 0.35,
+          color:
+            typeof template.defaults.background.overlay?.color === "string"
+              ? template.defaults.background.overlay.color
+              : "#000000"
+        };
+
         const nextSlides = prevSlides.map((s) => {
           if (!s || typeof s !== "object") return s;
           const slideObj = s as Record<string, unknown>;
@@ -608,6 +689,7 @@ export default function StudioShell(props: Props) {
               y: rect.y,
               width: rect.w,
               height: rect.h,
+              fontFamily: template.defaults.typography.fontFamily,
               fontSize: sizeForId[id] ?? o.fontSize
             };
           });
@@ -637,17 +719,46 @@ export default function StudioShell(props: Props) {
               } as Record<string, unknown>;
             });
 
-          return { ...slideObj, objects: [...nextObjects, ...placeholders] };
+          const background =
+            slideObj.background && typeof slideObj.background === "object"
+              ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
+                  string,
+                  unknown
+                >)
+              : {};
+          background.overlay = templateOverlay;
+          return {
+            ...slideObj,
+            background,
+            objects: [...nextObjects, ...placeholders]
+          };
         });
 
         const prevGlobal =
           prev.global && typeof prev.global === "object"
             ? (prev.global as Record<string, unknown>)
             : {};
+        const nextTypography: TypographyV1 = {
+          fontFamily: template.defaults.typography.fontFamily,
+          titleSize: template.defaults.typography.titleSize,
+          bodySize: template.defaults.typography.bodySize,
+          taglineSize: template.defaults.typography.taglineSize,
+          ctaSize: template.defaults.typography.ctaSize
+        };
+        const globalBg =
+          prevGlobal.background && typeof prevGlobal.background === "object"
+            ? ({ ...(prevGlobal.background as Record<string, unknown>) } as Record<
+                string,
+                unknown
+              >)
+            : {};
+        globalBg.overlay = templateOverlay;
         const nextGlobal = {
           ...prevGlobal,
           templateId: template.id,
-          templateData: template
+          templateData: template,
+          typography: nextTypography,
+          background: globalBg
         };
         return { ...prev, global: nextGlobal, slides: nextSlides };
       });
@@ -659,48 +770,149 @@ export default function StudioShell(props: Props) {
 
   const applyPaletteColors = React.useCallback(
     (palette: PaletteV1, paletteId: string | null) => {
-    setEditorState((prev) => {
-      const prevSlides = Array.isArray(prev.slides)
-        ? ([...(prev.slides as SlideLike[])] as SlideLike[])
-        : [...props.slides];
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
 
-      const nextSlides = prevSlides.map((s) => {
-        if (!s || typeof s !== "object") return s;
-        const slideObj = s as Record<string, unknown>;
-        const objects = Array.isArray(slideObj.objects)
-          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
-          : [];
-        const nextObjects = objects.map((o) => {
-          if (o.type !== "text") return o;
-          const id = typeof o.id === "string" ? o.id : null;
-          const fill = id === "title" ? palette.accent : palette.text;
-          return { ...o, fill };
+        const nextSlides = prevSlides.map((s) => {
+          if (!s || typeof s !== "object") return s;
+          const slideObj = s as Record<string, unknown>;
+          const objects = Array.isArray(slideObj.objects)
+            ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
+            : [];
+          const nextObjects = objects.map((o) => {
+            if (o.type !== "text") return o;
+            const id = typeof o.id === "string" ? o.id : null;
+            const fill = id === "title" ? palette.accent : palette.text;
+            return { ...o, fill };
+          });
+          const background =
+            slideObj.background && typeof slideObj.background === "object"
+              ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
+                  string,
+                  unknown
+                >)
+              : {};
+          background.color = palette.background;
+          return { ...slideObj, background, objects: nextObjects };
         });
-        const background =
-          slideObj.background && typeof slideObj.background === "object"
-            ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
+
+        const prevGlobal =
+          prev.global && typeof prev.global === "object"
+            ? (prev.global as Record<string, unknown>)
+            : {};
+        const nextGlobal = {
+          ...prevGlobal,
+          paletteId,
+          paletteData: palette
+        };
+
+        return { ...prev, global: nextGlobal, slides: nextSlides };
+      });
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
+    },
+    [props.slides]
+  );
+
+  const applyTypography = React.useCallback(
+    (typography: TypographyV1) => {
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+
+        const nextSlides = prevSlides.map((s) => {
+          if (!s || typeof s !== "object") return s;
+          const slideObj = s as Record<string, unknown>;
+          const objects = Array.isArray(slideObj.objects)
+            ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
+            : [];
+          const nextObjects = objects.map((o) => {
+            if (o.type !== "text") return o;
+            const id = typeof o.id === "string" ? o.id : null;
+            const nextFontSize =
+              id === "title"
+                ? typography.titleSize
+                : id === "body"
+                  ? typography.bodySize
+                  : id === "cta" && typeof typography.ctaSize === "number"
+                    ? typography.ctaSize
+                    : id === "tagline" && typeof typography.taglineSize === "number"
+                      ? typography.taglineSize
+                      : (o.fontSize as unknown as number | undefined);
+            return {
+              ...o,
+              fontFamily: typography.fontFamily,
+              ...(typeof nextFontSize === "number"
+                ? { fontSize: nextFontSize }
+                : null)
+            };
+          });
+          return { ...slideObj, objects: nextObjects };
+        });
+
+        const prevGlobal =
+          prev.global && typeof prev.global === "object"
+            ? (prev.global as Record<string, unknown>)
+            : {};
+        const nextGlobal = {
+          ...prevGlobal,
+          typography
+        };
+
+        return { ...prev, global: nextGlobal, slides: nextSlides };
+      });
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
+    },
+    [props.slides]
+  );
+
+  const applyOverlay = React.useCallback(
+    (overlay: OverlayV1) => {
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+
+        const nextSlides = prevSlides.map((s) => {
+          if (!s || typeof s !== "object") return s;
+          const slideObj = s as Record<string, unknown>;
+          const background =
+            slideObj.background && typeof slideObj.background === "object"
+              ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
+                  string,
+                  unknown
+                >)
+              : {};
+          background.overlay = overlay;
+          return { ...slideObj, background };
+        });
+
+        const prevGlobal =
+          prev.global && typeof prev.global === "object"
+            ? (prev.global as Record<string, unknown>)
+            : {};
+        const globalBg =
+          prevGlobal.background && typeof prevGlobal.background === "object"
+            ? ({ ...(prevGlobal.background as Record<string, unknown>) } as Record<
                 string,
                 unknown
               >)
             : {};
-        background.color = palette.background;
-        return { ...slideObj, background, objects: nextObjects };
+        globalBg.overlay = overlay;
+
+        const nextGlobal = {
+          ...prevGlobal,
+          background: globalBg
+        };
+
+        return { ...prev, global: nextGlobal, slides: nextSlides };
       });
-
-      const prevGlobal =
-        prev.global && typeof prev.global === "object"
-          ? (prev.global as Record<string, unknown>)
-          : {};
-      const nextGlobal = {
-        ...prevGlobal,
-        paletteId,
-        paletteData: palette
-      };
-
-      return { ...prev, global: nextGlobal, slides: nextSlides };
-    });
-    setDirty(true);
-    setCanvasRevision((v) => v + 1);
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
     },
     [props.slides]
   );
@@ -1890,22 +2102,217 @@ export default function StudioShell(props: Props) {
                         </div>
                       </div>
                     )}
+
+                    <div className="rounded-xl border bg-background/70 p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          Overlay (legibilidade)
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={globalOverlay.enabled}
+                            onChange={(e) => {
+                              applyOverlay({ ...globalOverlay, enabled: e.target.checked });
+                            }}
+                          />
+                          Ativar
+                        </label>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <label className="space-y-1">
+                          <div className="text-[11px] text-muted-foreground">Cor</div>
+                          <input
+                            type="color"
+                            value={globalOverlay.color}
+                            onChange={(e) =>
+                              applyOverlay({ ...globalOverlay, color: e.target.value })
+                            }
+                            className="h-9 w-16 cursor-pointer rounded-lg border bg-background p-1"
+                            disabled={!globalOverlay.enabled}
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <div className="text-[11px] text-muted-foreground">
+                            Opacidade: {Math.round(globalOverlay.opacity * 100)}%
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={0.95}
+                            step={0.05}
+                            value={globalOverlay.opacity}
+                            onChange={(e) => {
+                              const n = Number(e.target.value);
+                              if (!Number.isFinite(n)) return;
+                              applyOverlay({
+                                ...globalOverlay,
+                                opacity: clampNumberRange(n, 0, 0.95)
+                              });
+                            }}
+                            className="w-full"
+                            disabled={!globalOverlay.enabled}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="mt-2 text-[11px] text-muted-foreground">
+                        Útil quando você usa imagem de fundo e quer garantir contraste do texto.
+                      </div>
+                    </div>
                   </div>
                 ) : null}
 
                 {showText ? (
-                  <div className="rounded-2xl border bg-background px-4 py-3">
-                    <div className="text-base font-medium">Texto</div>
-                    <div className="mt-2 space-y-3 text-xs text-muted-foreground">
-                      <div>
-                        Tipografia global/per-slide entra nas próximas tasks. Por enquanto, você pode inserir e editar caixas de texto no canvas.
+                  <div className="space-y-3">
+                    <div className="text-sm font-semibold">Texto</div>
+
+                    <div className="rounded-xl border bg-background/70 p-3">
+                      <div className="text-xs text-muted-foreground">
+                        Tipografia global (aplica em todos os slides).
                       </div>
+
+                      <div className="mt-3 grid gap-3">
+                        <label className="space-y-1">
+                          <div className="text-[11px] text-muted-foreground">Fonte</div>
+                          <select
+                            value={globalTypography.fontFamily}
+                            onChange={(e) =>
+                              applyTypography({
+                                ...globalTypography,
+                                fontFamily: e.target.value
+                              })
+                            }
+                            className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                          >
+                            <option value='ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'>
+                              Sans (padrão)
+                            </option>
+                            <option value='Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'>
+                              Inter (se disponível)
+                            </option>
+                            <option value='ui-serif, Georgia, Cambria, "Times New Roman", Times, serif'>
+                              Serif
+                            </option>
+                            <option value='ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'>
+                              Mono
+                            </option>
+                          </select>
+                        </label>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="space-y-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              Título (px)
+                            </div>
+                            <input
+                              type="number"
+                              min={24}
+                              max={140}
+                              value={globalTypography.titleSize}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (!Number.isFinite(n)) return;
+                                applyTypography({
+                                  ...globalTypography,
+                                  titleSize: clampNumberRange(Math.trunc(n), 24, 140)
+                                });
+                              }}
+                              className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              Corpo (px)
+                            </div>
+                            <input
+                              type="number"
+                              min={16}
+                              max={72}
+                              value={globalTypography.bodySize}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (!Number.isFinite(n)) return;
+                                applyTypography({
+                                  ...globalTypography,
+                                  bodySize: clampNumberRange(Math.trunc(n), 16, 72)
+                                });
+                              }}
+                              className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="space-y-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              CTA (px)
+                            </div>
+                            <input
+                              type="number"
+                              min={14}
+                              max={60}
+                              value={globalTypography.ctaSize ?? 28}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (!Number.isFinite(n)) return;
+                                applyTypography({
+                                  ...globalTypography,
+                                  ctaSize: clampNumberRange(Math.trunc(n), 14, 60)
+                                });
+                              }}
+                              className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              Tagline (px)
+                            </div>
+                            <input
+                              type="number"
+                              min={12}
+                              max={48}
+                              value={globalTypography.taglineSize ?? 20}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (!Number.isFinite(n)) return;
+                                applyTypography({
+                                  ...globalTypography,
+                                  taglineSize: clampNumberRange(Math.trunc(n), 12, 48)
+                                });
+                              }}
+                              className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                            />
+                          </label>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyTypography({
+                              fontFamily: effectiveTemplate.defaults.typography.fontFamily,
+                              titleSize: effectiveTemplate.defaults.typography.titleSize,
+                              bodySize: effectiveTemplate.defaults.typography.bodySize,
+                              taglineSize: effectiveTemplate.defaults.typography.taglineSize,
+                              ctaSize: effectiveTemplate.defaults.typography.ctaSize
+                            });
+                          }}
+                          className="rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
+                        >
+                          Resetar para o template
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 text-xs text-muted-foreground">
                       <button
                         type="button"
                         onClick={() => canvasApiRef.current?.addText()}
                         className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary"
                       >
-                        Adicionar texto <span className="font-mono text-xs text-muted-foreground">(T)</span>
+                        Adicionar texto{" "}
+                        <span className="font-mono text-xs text-muted-foreground">(T)</span>
                       </button>
                       <div className="text-[11px] text-muted-foreground">
                         Atalhos: <span className="font-mono">Del/Backspace</span> (remover),{" "}

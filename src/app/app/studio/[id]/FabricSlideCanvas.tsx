@@ -11,6 +11,7 @@ type SlideObjectV1 = {
   width?: number;
   height?: number;
   text?: string;
+  fontFamily?: string;
   fontSize?: number;
   fontWeight?: number;
   fill?: string;
@@ -24,7 +25,10 @@ export type SlideV1 = {
   width: number;
   height: number;
   objects: SlideObjectV1[];
-  background?: { color?: string } | null;
+  background?: {
+    color?: string;
+    overlay?: { enabled?: boolean; opacity?: number; color?: string };
+  } | null;
 };
 
 export type FabricSlideCanvasHandle = {
@@ -49,6 +53,16 @@ function getObjectId(obj: FabricObject): string | null {
 
 function setObjectId(obj: FabricObject, id: string) {
   (obj as unknown as { dojogramId?: string }).dojogramId = id;
+}
+
+function toFontStack(fontFamily: string | undefined) {
+  const raw = typeof fontFamily === "string" ? fontFamily.trim() : "";
+  if (!raw) {
+    return "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  }
+  // If caller already provided a stack, keep it as-is.
+  if (raw.includes(",")) return raw;
+  return `${raw}, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
 }
 
 function createId(prefix = "obj") {
@@ -595,23 +609,24 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     canvas.requestRenderAll();
   }, [slide.height, slide.width]);
 
-  const renderSlide = React.useCallback(() => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
+    const renderSlide = React.useCallback(() => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
 
-    const token = (renderTokenRef.current += 1);
-    isHydratingRef.current = true;
-    canvas.clear();
+      const token = (renderTokenRef.current += 1);
+      isHydratingRef.current = true;
+      canvas.clear();
 
-    const bgColor = slide.background?.color ?? "#ffffff";
-    canvas.backgroundColor = bgColor;
+      const bgColor = slide.background?.color ?? "#ffffff";
+      canvas.backgroundColor = bgColor;
 
-    const slideW = clampNumber(slide.width, 1080);
+      const slideW = clampNumber(slide.width, 1080);
+      const slideH = clampNumber(slide.height, 1080);
 
-    // 1) Images (behind text)
-    for (const [idx, raw] of (slide.objects ?? []).entries()) {
-      if (!raw || typeof raw !== "object") continue;
-      if (raw.type !== "image") continue;
+      // 1) Images (behind text)
+      for (const [idx, raw] of (slide.objects ?? []).entries()) {
+        if (!raw || typeof raw !== "object") continue;
+        if (raw.type !== "image") continue;
 
       const id = raw.id ?? `obj_${idx + 1}`;
       const assetId = typeof raw.assetId === "string" ? raw.assetId : null;
@@ -701,6 +716,30 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         });
     }
 
+    // 1.5) Overlay (global/per-slide background readability)
+    const overlay = slide.background?.overlay;
+    if (overlay?.enabled) {
+      const opacity =
+        typeof overlay.opacity === "number" && Number.isFinite(overlay.opacity)
+          ? Math.min(0.95, Math.max(0, overlay.opacity))
+          : 0.35;
+      const color = typeof overlay.color === "string" ? overlay.color : "#000000";
+      const rect = new Rect({
+        left: 0,
+        top: 0,
+        width: slideW,
+        height: slideH,
+        originX: "left",
+        originY: "top",
+        fill: color,
+        opacity,
+        selectable: false,
+        evented: false
+      });
+      canvas.add(rect);
+      canvas.requestRenderAll();
+    }
+
     // 2) Text
     for (const [idx, raw] of (slide.objects ?? []).entries()) {
       if (!raw || typeof raw !== "object") continue;
@@ -720,8 +759,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         originY: "top",
         // Use a reliably available font stack to keep text measurement stable
         // (cursor positioning depends on accurate glyph metrics).
-        fontFamily:
-          "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        fontFamily: toFontStack(raw.fontFamily),
         fontSize: clampNumber(raw.fontSize, 56),
         fontWeight: clampNumber(raw.fontWeight, 600),
         fill: raw.fill ?? "#111827",
