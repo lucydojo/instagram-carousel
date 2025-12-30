@@ -9,6 +9,7 @@ type SlideObjectV1 = {
   id?: string;
   type: string;
   variant?: TextVariant;
+  hidden?: boolean;
   x?: number;
   y?: number;
   width?: number;
@@ -1041,10 +1042,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         const slideW = clampNumber(slide.width, 1080);
         const slideH = clampNumber(slide.height, 1080);
 
-        // 1) Images (behind text)
-        for (const [idx, raw] of (slide.objects ?? []).entries()) {
-          if (!raw || typeof raw !== "object") continue;
-          if (raw.type !== "image") continue;
+      // 1) Images (behind text)
+      for (const [idx, raw] of (slide.objects ?? []).entries()) {
+        if (!raw || typeof raw !== "object") continue;
+        if (raw.type !== "image") continue;
+        if (raw.hidden) continue;
 
           const id = raw.id ?? `obj_${idx + 1}`;
           const assetId = typeof raw.assetId === "string" ? raw.assetId : null;
@@ -1164,6 +1166,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         for (const [idx, raw] of (slide.objects ?? []).entries()) {
           if (!raw || typeof raw !== "object") continue;
           if (raw.type !== "text") continue;
+          if (raw.hidden) continue;
 
           const id = raw.id ?? `obj_${idx + 1}`;
           const text = raw.text ?? "";
