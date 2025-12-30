@@ -24,7 +24,7 @@ import {
   studioCleanup,
   studioCreatePalette,
   studioDeletePalette,
-  studioEdit,
+  studioEditInline,
   studioGenerate,
   studioSaveEditorState,
   studioSaveEditorStateInline,
@@ -598,7 +598,16 @@ export default function StudioShell(props: Props) {
   const [assetsTab, setAssetsTab] = React.useState<"generated" | "reference">(
     "generated"
   );
+  const [extraGeneratedAssets, setExtraGeneratedAssets] = React.useState<Asset[]>([]);
   const [activeDock, setActiveDock] = React.useState<DockItem>("generate");
+  const [editInstruction, setEditInstruction] = React.useState("");
+  const [editTarget, setEditTarget] = React.useState<string>(() => String(props.initialSlideIndex));
+  const [lastEdit, setLastEdit] = React.useState<{
+    applied: number;
+    locked: number;
+    missing: number;
+    summary: string | null;
+  } | null>(null);
   const [editorState, setEditorState] = React.useState<Record<string, unknown>>(
     () =>
       safeParseJson<Record<string, unknown>>(props.defaults.editorStateJson) ?? {
@@ -686,15 +695,19 @@ export default function StudioShell(props: Props) {
   const slidesFromState = Array.isArray(editorState.slides)
     ? (editorState.slides as SlideLike[])
     : props.slides;
+  const generatedAssets = React.useMemo(
+    () => [...extraGeneratedAssets, ...props.assets.generated],
+    [extraGeneratedAssets, props.assets.generated]
+  );
   const assetUrlsById = React.useMemo(() => {
     const map: Record<string, string> = {};
-    for (const a of [...props.assets.generated, ...props.assets.reference]) {
+    for (const a of [...generatedAssets, ...props.assets.reference]) {
       if (typeof a.id !== "string") continue;
       if (typeof a.signedUrl !== "string" || !a.signedUrl) continue;
       map[a.id] = a.signedUrl;
     }
     return map;
-  }, [props.assets.generated, props.assets.reference]);
+  }, [generatedAssets, props.assets.reference]);
   const selectedSlide =
     slidesFromState.length > 0 ? slidesFromState[selectedSlideIndex - 1] : null;
   const currentSlideKey = React.useMemo(() => {
@@ -1462,7 +1475,7 @@ export default function StudioShell(props: Props) {
   const showJson = activeDock === "json";
 
   const generateAction = studioGenerate;
-  const editAction = studioEdit;
+  const editInlineAction = studioEditInline;
   const saveEditorStateAction = studioSaveEditorState;
 
   const leftShiftPx = leftOpen ? 220 : 0;
@@ -2012,24 +2025,86 @@ export default function StudioShell(props: Props) {
                         </span>
                       </div>
 
-                      <form action={editAction} className="space-y-2">
-                        <input type="hidden" name="carouselId" value={props.carouselId} />
-                        <input
-                          type="hidden"
-                          name="currentSlide"
-                          value={selectedSlideIndex}
-                        />
+                      <form
+                        className="space-y-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          if (isPending) return;
+                          const instruction = editInstruction.trim();
+                          if (instruction.length < 2) return;
+                          const raw = editTarget.trim();
+                          const slideIndex =
+                            raw.length === 0 ? undefined : Number.isFinite(Number(raw)) ? Math.trunc(Number(raw)) : undefined;
+
+                          startTransition(async () => {
+                            const res = await editInlineAction({
+                              carouselId: props.carouselId,
+                              instruction,
+                              slideIndex
+                            });
+
+                            if (!res.ok) {
+                              const message =
+                                res.error === "UNAUTHENTICATED"
+                                  ? "Você precisa entrar novamente."
+                                  : String(res.error ?? "Falha ao aplicar edição.");
+                              setSaveError(message);
+                              return;
+                            }
+
+                            setSaveError(null);
+                            setLastEdit({
+                              applied: res.applied,
+                              locked: res.skippedLocked,
+                              missing: res.skippedMissing,
+                              summary: res.summary ?? null
+                            });
+                            setEditorState(res.nextState as unknown as Record<string, unknown>);
+                            setDirty(false);
+                            setLastSavedAt(new Date().toISOString());
+                            setCanvasRevision((v) => v + 1);
+                            setEditInstruction("");
+
+                            const newAssets = Array.isArray(res.newAssets) ? res.newAssets : [];
+                            if (newAssets.length > 0) {
+                              setExtraGeneratedAssets((prev) => {
+                                const existing = new Set(prev.map((a) => a.id));
+                                const next = [...prev];
+                                for (const a of newAssets) {
+                                  if (!a || typeof a !== "object") continue;
+                                  const id =
+                                    "id" in a && typeof (a as { id?: unknown }).id === "string"
+                                      ? (a as { id: string }).id
+                                      : null;
+                                  const signedUrl =
+                                    "signedUrl" in a &&
+                                    typeof (a as { signedUrl?: unknown }).signedUrl === "string"
+                                      ? (a as { signedUrl: string }).signedUrl
+                                      : null;
+                                  if (!id || existing.has(id)) continue;
+                                  existing.add(id);
+                                  next.push({ id, asset_type: "generated", signedUrl });
+                                }
+                                return next;
+                              });
+                            }
+                          });
+                        }}
+                      >
                         <textarea
                           name="instruction"
                           className="h-24 w-full rounded-xl border bg-background p-3 text-sm"
                           placeholder='Ex: “Deixe o título mais forte e encurte o texto do corpo.”'
                           required
+                          value={editInstruction}
+                          onChange={(e) => setEditInstruction(e.target.value)}
                         />
                         <div className="flex items-center gap-2">
                           <select
                             name="slideIndex"
                             className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
-                            defaultValue={selectedSlideIndex}
+                            value={editTarget}
+                            onChange={(e) => setEditTarget(e.target.value)}
                           >
                             {Array.from({ length: props.slideCount }, (_, i) => (
                               <option key={i + 1} value={i + 1}>
@@ -2042,10 +2117,25 @@ export default function StudioShell(props: Props) {
                             className="whitespace-nowrap rounded-xl bg-foreground px-3 py-2 text-sm font-medium text-background hover:bg-foreground/90"
                             type="submit"
                           >
-                            Aplicar
+                            {isPending ? "Aplicando..." : "Aplicar"}
                           </button>
                         </div>
                       </form>
+
+                      {lastEdit ? (
+                        <div className="rounded-xl border bg-background/70 p-3 text-xs text-muted-foreground">
+                          <div>
+                            Aplicado: <span className="font-medium text-foreground">{lastEdit.applied}</span>{" "}
+                            · Locks:{" "}
+                            <span className="font-medium text-foreground">{lastEdit.locked}</span>{" "}
+                            · Não encontrados:{" "}
+                            <span className="font-medium text-foreground">{lastEdit.missing}</span>
+                          </div>
+                          {lastEdit.summary ? (
+                            <div className="mt-1 text-muted-foreground">{lastEdit.summary}</div>
+                          ) : null}
+                        </div>
+                      ) : null}
 
                       <div className="text-xs text-muted-foreground">
                         Use locks para proteger elementos contra alterações automáticas.
@@ -2072,7 +2162,7 @@ export default function StudioShell(props: Props) {
                             : "hover:bg-secondary"
                         ].join(" ")}
                       >
-                        Geradas ({props.assets.generated.length})
+                        Geradas ({generatedAssets.length})
                       </button>
                       <button
                         type="button"
@@ -2169,13 +2259,13 @@ export default function StudioShell(props: Props) {
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {props.assets.generated.length === 0 ? (
+                        {generatedAssets.length === 0 ? (
                           <div className="text-xs text-muted-foreground">
                             Nenhuma imagem gerada ainda.
                           </div>
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
-                            {props.assets.generated.slice(0, 12).map((a) => (
+                            {generatedAssets.slice(0, 12).map((a) => (
                               <button
                                 key={a.id}
                                 type="button"

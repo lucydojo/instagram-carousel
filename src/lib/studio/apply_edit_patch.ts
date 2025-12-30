@@ -97,6 +97,18 @@ export function applyEditPatch(input: {
       continue;
     }
 
+    if (op.op === "set_asset") {
+      (obj as Record<string, unknown>).assetId = op.assetId;
+      applied++;
+      continue;
+    }
+
+    if (op.op === "regenerate_image") {
+      // Handled upstream (server action generates an asset and converts to `set_asset`).
+      skippedMissing++;
+      continue;
+    }
+
     if (op.op === "move") {
       if (typeof op.x === "number") obj.x = op.x;
       if (typeof op.y === "number") obj.y = op.y;

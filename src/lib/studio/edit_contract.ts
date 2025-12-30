@@ -24,6 +24,21 @@ export const editOpSchema = z.discriminatedUnion("op", [
     .merge(slideTargetSchema),
   z
     .object({
+      op: z.literal("set_asset"),
+      objectId: z.string().min(1),
+      assetId: z.string().min(1)
+    })
+    .merge(slideTargetSchema),
+  z
+    .object({
+      op: z.literal("regenerate_image"),
+      objectId: z.string().min(1),
+      prompt: z.string().min(1).max(1500),
+      withText: z.boolean().optional()
+    })
+    .merge(slideTargetSchema),
+  z
+    .object({
       op: z.literal("move"),
       objectId: z.string().min(1),
       x: z.number().finite().optional(),
@@ -38,4 +53,3 @@ export const editPatchSchema = z.object({
 });
 
 export type EditPatch = z.infer<typeof editPatchSchema>;
-

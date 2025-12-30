@@ -165,3 +165,11 @@ export async function studioEdit(formData: FormData) {
     error: null
   });
 }
+
+export async function studioEditInline(input: {
+  carouselId: string;
+  instruction: string;
+  slideIndex?: number;
+}) {
+  return await applyNaturalLanguageEdit(input);
+}

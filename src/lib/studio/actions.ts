@@ -6,7 +6,12 @@ import { isCurrentUserSuperAdmin } from "@/lib/app/access";
 import { editorStateSchema } from "@/lib/studio/queries";
 import { createSignedUrl } from "@/lib/studio/storage";
 import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
-import { isSupportedGeminiImageModel } from "@/lib/ai/gemini_image";
+import {
+  geminiNanoBananaGenerateImage,
+  GEMINI_IMAGE_MODELS,
+  isSupportedGeminiImageModel,
+  type GeminiImageModel
+} from "@/lib/ai/gemini_image";
 import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { editPatchSchema } from "@/lib/studio/edit_contract";
 import { applyEditPatch } from "@/lib/studio/apply_edit_patch";
@@ -653,11 +658,32 @@ function toEditableSummary(editorState: unknown) {
             type: obj.type ?? null,
             text: obj.text ?? null,
             x: obj.x ?? null,
-            y: obj.y ?? null
+            y: obj.y ?? null,
+            width: obj.width ?? null,
+            height: obj.height ?? null,
+            slotId: obj.slotId ?? null,
+            assetId: obj.assetId ?? null
           };
         })
     };
   });
+}
+
+async function uploadBytesToStorage(input: {
+  bucket: string;
+  path: string;
+  bytes: Uint8Array;
+  contentType: string;
+}) {
+  const admin = createSupabaseAdminClientIfAvailable();
+  const supabase = admin ?? (await createSupabaseServerClient());
+
+  const body = Buffer.from(input.bytes);
+  const { error } = await supabase.storage
+    .from(input.bucket)
+    .upload(input.path, body, { upsert: false, contentType: input.contentType });
+
+  return { error };
 }
 
 function listLockedElements(elementLocks: unknown) {
@@ -698,7 +724,7 @@ export async function applyNaturalLanguageEdit(input: {
 
   const { data: carousel } = await supabase
     .from("carousels")
-    .select("id, owner_id, editor_state, element_locks, generation_meta")
+    .select("id, workspace_id, owner_id, editor_state, element_locks, generation_meta")
     .eq("id", parsed.data.carouselId)
     .maybeSingle();
 
@@ -715,8 +741,10 @@ export async function applyNaturalLanguageEdit(input: {
     "Sua tarefa é gerar um PATCH JSON para alterar o editor_state.",
     "NÃO inclua Markdown. Responda SOMENTE com JSON válido.",
     "Regras:",
-    "- Use apenas operações: set_text, set_style, move",
+    "- Use apenas operações: set_text, set_style, move, regenerate_image",
     "- Sempre inclua slideIndex (1..N) e objectId",
+    "- Use regenerate_image SOMENTE se o usuário pedir para mudar/gerar imagem",
+    "- Em regenerate_image.prompt, descreva a imagem e inclua '1080x1080' e o estilo desejado",
     "- NÃO modifique elementos travados (lockedElements)."
   ].join("\n");
 
@@ -736,7 +764,14 @@ export async function applyNaturalLanguageEdit(input: {
         ops: [
           { op: "set_text", slideIndex: 1, objectId: "title", text: "..." },
           { op: "set_style", slideIndex: 1, objectId: "title", style: { fontWeight: 700 } },
-          { op: "move", slideIndex: 1, objectId: "title", x: 100, y: 200 }
+          { op: "move", slideIndex: 1, objectId: "title", x: 100, y: 200 },
+          {
+            op: "regenerate_image",
+            slideIndex: 1,
+            objectId: "image_hero",
+            prompt: "Gere uma imagem ...",
+            withText: false
+          }
         ],
         summary: "..."
       },
@@ -765,10 +800,89 @@ export async function applyNaturalLanguageEdit(input: {
     };
   }
 
+  // Convert image regeneration ops into concrete assets (set_asset).
+  const admin = createSupabaseAdminClientIfAvailable();
+  const supabaseForInsert = admin ?? supabase;
+
+  const setAssetOps: Array<{ op: "set_asset"; slideIndex: number; objectId: string; assetId: string }> = [];
+  const newAssets: Array<{ id: string; signedUrl: string | null }> = [];
+
+  for (const op of patchRes.data.ops) {
+    if (op.op !== "regenerate_image") continue;
+    const slideIndex = typeof op.slideIndex === "number" ? op.slideIndex : null;
+    if (!slideIndex) continue;
+
+    const wantsText =
+      Boolean(op.withText) ||
+      /texto\s+na\s+imagem|com\s+texto/i.test(parsed.data.instruction);
+
+    const model: GeminiImageModel = wantsText
+      ? GEMINI_IMAGE_MODELS.NANO_BANANA_PRO
+      : GEMINI_IMAGE_MODELS.NANO_BANANA;
+
+    const image = await geminiNanoBananaGenerateImage({
+      prompt: op.prompt,
+      model
+    });
+    if (!image.ok) continue;
+
+    const ext = image.mimeType.includes("png")
+      ? "png"
+      : image.mimeType.includes("jpeg") || image.mimeType.includes("jpg")
+        ? "jpg"
+        : "png";
+
+    const path = `workspaces/${carousel.workspace_id}/carousels/${carousel.id}/generated/${crypto.randomUUID()}.${ext}`;
+
+    const { error: uploadError } = await uploadBytesToStorage({
+      bucket: "carousel-assets",
+      path,
+      bytes: image.bytes,
+      contentType: image.mimeType
+    });
+    if (uploadError) continue;
+
+    const { data: inserted, error: insertError } = await supabaseForInsert
+      .from("carousel_assets")
+      .insert({
+        workspace_id: carousel.workspace_id,
+        carousel_id: carousel.id,
+        owner_id: userData.user.id,
+        asset_type: "generated",
+        storage_bucket: "carousel-assets",
+        storage_path: path,
+        mime_type: image.mimeType,
+        status: "ready",
+        metadata: {
+          provider: image.provider,
+          model: image.model,
+          slideIndex,
+          prompt: op.prompt,
+          source: "nl_edit"
+        }
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !inserted) continue;
+    setAssetOps.push({ op: "set_asset", slideIndex, objectId: op.objectId, assetId: inserted.id });
+
+    const signed = await createSignedUrl({ bucket: "carousel-assets", path });
+    newAssets.push({ id: inserted.id, signedUrl: signed.signedUrl });
+  }
+
+  const patchForApply = {
+    ...patchRes.data,
+    ops: [
+      ...patchRes.data.ops.filter((op) => op.op !== "regenerate_image"),
+      ...setAssetOps
+    ]
+  };
+
   const applied = applyEditPatch({
     editorState: currentState.data,
     locks: carousel.element_locks as unknown,
-    patch: patchRes.data
+    patch: patchForApply
   });
 
   const prevMeta =
@@ -805,6 +919,8 @@ export async function applyNaturalLanguageEdit(input: {
     applied: applied.applied,
     skippedLocked: applied.skippedLocked,
     skippedMissing: applied.skippedMissing,
-    summary: patchRes.data.summary ?? null
+    summary: patchRes.data.summary ?? null,
+    nextState: applied.nextState,
+    newAssets
   };
 }
