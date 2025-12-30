@@ -657,6 +657,7 @@ function toEditableSummary(editorState: unknown) {
           return {
             id: obj.id ?? null,
             type: obj.type ?? null,
+            variant: obj.variant ?? null,
             text: obj.text ?? null,
             x: obj.x ?? null,
             y: obj.y ?? null,
@@ -749,6 +750,15 @@ function inferRoleForObject(obj: { id?: unknown; type?: unknown }): RequestedRol
   const id = typeof obj.id === "string" ? obj.id : null;
   if (type === "image") return "image";
   if (type !== "text") return null;
+  const variant = (obj as Record<string, unknown>).variant;
+  if (typeof variant === "string") {
+    const v = variant.toLowerCase();
+    if (v === "title") return "title";
+    if (v === "body") return "body";
+    if (v === "tagline") return "tagline";
+    if (v === "cta") return "cta";
+    if (v === "custom") return "text";
+  }
   const key = (id ?? "").toLowerCase();
   if (key === "title" || key.includes("title") || key.includes("titulo")) return "title";
   if (key === "body" || key.includes("body") || key.includes("corpo") || key.includes("desc"))

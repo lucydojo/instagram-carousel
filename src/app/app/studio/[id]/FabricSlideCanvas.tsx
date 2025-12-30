@@ -208,6 +208,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   const nextSlideRef = React.useRef<SlideV1 | null>(null);
   const slideRef = React.useRef(slide);
   const onSlideChangeRef = React.useRef<Props["onSlideChange"]>(() => {});
+  const imageElementCacheRef = React.useRef<Map<string, HTMLImageElement>>(new Map());
+  const imagePromiseCacheRef = React.useRef<Map<string, Promise<HTMLImageElement>>>(new Map());
   const clipboardRef = React.useRef<{ objects: SlideObjectV1[]; pasteN: number } | null>(
     null
   );
@@ -255,6 +257,33 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   React.useEffect(() => {
     slideRef.current = slide;
   }, [slide]);
+
+  const loadImageElement = React.useCallback((url: string) => {
+    const cached = imageElementCacheRef.current.get(url);
+    if (cached) return Promise.resolve(cached);
+
+    const inFlight = imagePromiseCacheRef.current.get(url);
+    if (inFlight) return inFlight;
+
+    const p = new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = document.createElement("img");
+      el.crossOrigin = "anonymous";
+      el.decoding = "async";
+      el.onload = () => {
+        imagePromiseCacheRef.current.delete(url);
+        imageElementCacheRef.current.set(url, el);
+        resolve(el);
+      };
+      el.onerror = () => {
+        imagePromiseCacheRef.current.delete(url);
+        reject(new Error("failed to load image"));
+      };
+      el.src = url;
+    });
+
+    imagePromiseCacheRef.current.set(url, p);
+    return p;
+  }, []);
 
   const updateTextToolbar = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -1029,14 +1058,14 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           const width = clampNumber(raw.width, Math.max(1, slideW - 160));
           const height = clampNumber(raw.height, Math.max(1, width));
 
-          Image.fromURL(url, { crossOrigin: "anonymous" })
-            .then((img) => {
+          loadImageElement(url)
+            .then((el) => {
               // Ignore if we re-rendered since the request started.
               if (renderTokenRef.current !== token) return;
               if (!fabricRef.current) return;
 
-              const iw = clampNumber((img as unknown as { width?: unknown }).width, 1);
-              const ih = clampNumber((img as unknown as { height?: unknown }).height, 1);
+              const iw = clampNumber(el.naturalWidth, 1);
+              const ih = clampNumber(el.naturalHeight, 1);
               const slotAspect = width / Math.max(1, height);
               const imgAspect = iw / Math.max(1, ih);
 
@@ -1060,6 +1089,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
               const scale = width / Math.max(1, cropW);
 
+              const img = new Image(el);
               img.set({
                 left: 0,
                 top: 0,
