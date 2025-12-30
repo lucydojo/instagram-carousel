@@ -604,7 +604,8 @@ export default function StudioShell(props: Props) {
   const [editTarget, setEditTarget] = React.useState<string>(() => String(props.initialSlideIndex));
   const [lastEdit, setLastEdit] = React.useState<{
     applied: number;
-    locked: number;
+    blockedByLock: number;
+    ignored: number;
     missing: number;
     summary: string | null;
   } | null>(null);
@@ -2055,7 +2056,16 @@ export default function StudioShell(props: Props) {
                             setSaveError(null);
                             setLastEdit({
                               applied: res.applied,
-                              locked: res.skippedLocked,
+                              blockedByLock:
+                                typeof (res as { blockedByLock?: unknown }).blockedByLock ===
+                                "number"
+                                  ? ((res as { blockedByLock: number }).blockedByLock as number)
+                                  : res.skippedLocked,
+                              ignored:
+                                typeof (res as { skippedPolicy?: unknown }).skippedPolicy ===
+                                "number"
+                                  ? ((res as { skippedPolicy: number }).skippedPolicy as number)
+                                  : 0,
                               missing: res.skippedMissing,
                               summary: res.summary ?? null
                             });
@@ -2126,8 +2136,10 @@ export default function StudioShell(props: Props) {
                         <div className="rounded-xl border bg-background/70 p-3 text-xs text-muted-foreground">
                           <div>
                             Aplicado: <span className="font-medium text-foreground">{lastEdit.applied}</span>{" "}
-                            · Locks:{" "}
-                            <span className="font-medium text-foreground">{lastEdit.locked}</span>{" "}
+                            · Bloqueados (lock):{" "}
+                            <span className="font-medium text-foreground">{lastEdit.blockedByLock}</span>{" "}
+                            · Ignorados:{" "}
+                            <span className="font-medium text-foreground">{lastEdit.ignored}</span>{" "}
                             · Não encontrados:{" "}
                             <span className="font-medium text-foreground">{lastEdit.missing}</span>
                           </div>

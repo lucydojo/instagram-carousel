@@ -16,6 +16,7 @@ import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { editPatchSchema } from "@/lib/studio/edit_contract";
 import { applyEditPatch } from "@/lib/studio/apply_edit_patch";
 import { geminiGenerateJson } from "@/lib/ai/gemini";
+import { isLocked } from "@/lib/studio/locks";
 
 const idSchema = z.string().uuid();
 
@@ -710,6 +711,95 @@ function listLockedElements(elementLocks: unknown) {
   return locks;
 }
 
+type RequestedRole = "title" | "body" | "tagline" | "cta" | "image" | "text";
+
+function inferRequestedRoles(instruction: string): { wantsAll: boolean; roles: Set<RequestedRole> } {
+  const raw = instruction.toLowerCase();
+  const roles = new Set<RequestedRole>();
+
+  const wantsAll =
+    /\b(tudo|todos|todas|everything|all)\b/.test(raw) ||
+    /carrossel\s+(inteiro|completo)/.test(raw) ||
+    /mude\s+tudo|troque\s+tudo|refa[cç]a\s+tudo|reescreva\s+tudo/.test(raw);
+
+  const wantsImage =
+    /\b(imagem|imagens|foto|fotos|image|images|background|fundo)\b/.test(raw) ||
+    /regenera(r)?\s+imagem/.test(raw);
+  const wantsTitle = /\b(t[ií]tulo|title|heading)\b/.test(raw);
+  const wantsBody =
+    /\b(corpo|body|descri[cç][aã]o|par[aá]grafo)\b/.test(raw) ||
+    /texto\s+do\s+corpo/.test(raw);
+  const wantsCta = /\b(cta|call to action|chamada)\b/.test(raw);
+  const wantsTagline = /\b(tagline|subt[ií]tulo|subtitle)\b/.test(raw);
+
+  if (wantsImage) roles.add("image");
+  if (wantsTitle) roles.add("title");
+  if (wantsBody) roles.add("body");
+  if (wantsCta) roles.add("cta");
+  if (wantsTagline) roles.add("tagline");
+
+  // If user explicitly says "texto" but not image, treat as "text" intent.
+  if (!wantsImage && /\b(texto|copy)\b/.test(raw)) roles.add("text");
+
+  return { wantsAll, roles };
+}
+
+function inferRoleForObject(obj: { id?: unknown; type?: unknown }): RequestedRole | null {
+  const type = typeof obj.type === "string" ? obj.type : null;
+  const id = typeof obj.id === "string" ? obj.id : null;
+  if (type === "image") return "image";
+  if (type !== "text") return null;
+  const key = (id ?? "").toLowerCase();
+  if (key === "title" || key.includes("title") || key.includes("titulo")) return "title";
+  if (key === "body" || key.includes("body") || key.includes("corpo") || key.includes("desc"))
+    return "body";
+  if (key === "cta" || key.includes("cta")) return "cta";
+  if (key === "tagline" || key.includes("tagline") || key.includes("subtitulo")) return "tagline";
+  // Unknown text object: treat as generic text (only allowed when user asked for "texto" or "tudo").
+  return "text";
+}
+
+function buildSlideIdMap(summary: Array<{ slideIndex: number; slideId: string | null }>) {
+  const map = new Map<number, { slideId: string | null; slideKeyFallback: string }>();
+  for (const s of summary) {
+    map.set(s.slideIndex, {
+      slideId: s.slideId ?? null,
+      slideKeyFallback: `slide_${s.slideIndex}`
+    });
+  }
+  return map;
+}
+
+function buildAllowedTargetKeys(input: {
+  summary: ReturnType<typeof toEditableSummary>;
+  slideIndex?: number;
+  requested: { wantsAll: boolean; roles: Set<RequestedRole> };
+}) {
+  const allowed = new Set<string>();
+  const wantText = input.requested.roles.has("text");
+
+  for (const slide of input.summary) {
+    if (typeof input.slideIndex === "number" && slide.slideIndex !== input.slideIndex) continue;
+    for (const obj of slide.objects) {
+      const id = typeof obj.id === "string" ? obj.id : null;
+      if (!id) continue;
+      const role = inferRoleForObject(obj);
+      if (!role) continue;
+
+      const allow =
+        input.requested.wantsAll ||
+        input.requested.roles.size === 0 ||
+        input.requested.roles.has(role) ||
+        (wantText && role !== "image");
+      if (!allow) continue;
+
+      allowed.add(`${slide.slideIndex}:${id}`);
+    }
+  }
+
+  return allowed;
+}
+
 export async function applyNaturalLanguageEdit(input: {
   carouselId: string;
   instruction: string;
@@ -735,6 +825,13 @@ export async function applyNaturalLanguageEdit(input: {
   const editorState = carousel.editor_state as unknown;
   const summary = toEditableSummary(editorState);
   const locked = listLockedElements(carousel.element_locks as unknown);
+  const requested = inferRequestedRoles(parsed.data.instruction);
+  const allowedTargets = buildAllowedTargetKeys({
+    summary,
+    slideIndex: parsed.data.slideIndex,
+    requested
+  });
+  const slideIdMap = buildSlideIdMap(summary);
 
   const system = [
     "Você é um assistente de edição de um editor de carrosséis.",
@@ -745,7 +842,12 @@ export async function applyNaturalLanguageEdit(input: {
     "- Sempre inclua slideIndex (1..N) e objectId",
     "- Use regenerate_image SOMENTE se o usuário pedir para mudar/gerar imagem",
     "- Em regenerate_image.prompt, descreva a imagem e inclua '1080x1080' e o estilo desejado",
-    "- NÃO modifique elementos travados (lockedElements)."
+    "- NÃO modifique elementos travados (lockedElements).",
+    "- Se o usuário pedir para mudar um elemento travado, NÃO compense mudando outro elemento; apenas ignore e explique no summary.",
+    "- Não invente novos objectIds. Use apenas ids existentes no contexto.",
+    parsed.data.slideIndex
+      ? `- Restrinja a edição ao slideIndex alvo (${parsed.data.slideIndex}).`
+      : "- Se o usuário escolher um slide alvo, edite apenas aquele slide."
   ].join("\n");
 
   const user = [
@@ -754,6 +856,9 @@ export async function applyNaturalLanguageEdit(input: {
     "",
     "lockedElements:",
     JSON.stringify(locked, null, 2),
+    "",
+    "allowedTargets (slideIndex:objectId) — se um target não estiver aqui, NÃO edite:",
+    JSON.stringify(Array.from(allowedTargets), null, 2),
     "",
     parsed.data.slideIndex ? `slideIndex alvo: ${parsed.data.slideIndex}` : "",
     `Instrução do usuário: ${parsed.data.instruction}`,
@@ -782,6 +887,52 @@ export async function applyNaturalLanguageEdit(input: {
     .filter(Boolean)
     .join("\n");
 
+  // Early return: if user is requesting only locked targets (common "mude o título"),
+  // avoid spending tokens and just report the lock.
+  if (!requested.wantsAll && requested.roles.size > 0 && allowedTargets.size > 0) {
+    const slideIndex = parsed.data.slideIndex;
+    if (typeof slideIndex === "number") {
+      const slideMeta = slideIdMap.get(slideIndex);
+      const lockedRequested = Array.from(allowedTargets)
+        .filter((k) => k.startsWith(`${slideIndex}:`))
+        .filter((k) => {
+          const objectId = k.split(":")[1] ?? "";
+          return isLocked({
+            locks: carousel.element_locks as unknown,
+            slideId: slideMeta?.slideId ?? undefined,
+            slideIndex,
+            objectId
+          });
+        });
+
+      const hasAnyUnlockedAllowedTarget = Array.from(allowedTargets)
+        .filter((k) => k.startsWith(`${slideIndex}:`))
+        .some((k) => {
+          const objectId = k.split(":")[1] ?? "";
+          return !isLocked({
+            locks: carousel.element_locks as unknown,
+            slideId: slideMeta?.slideId ?? undefined,
+            slideIndex,
+            objectId
+          });
+        });
+
+      if (lockedRequested.length > 0 && !hasAnyUnlockedAllowedTarget) {
+        return {
+          ok: true as const,
+          applied: 0,
+          skippedLocked: 0,
+          skippedMissing: 0,
+          blockedByLock: lockedRequested.length,
+          skippedPolicy: 0,
+          summary: "Nada foi aplicado porque os elementos solicitados estão bloqueados por lock.",
+          nextState: currentStateSchemaFallback(editorState),
+          newAssets: []
+        };
+      }
+    }
+  }
+
   const patchRes = await geminiGenerateJson({
     system,
     user,
@@ -800,6 +951,24 @@ export async function applyNaturalLanguageEdit(input: {
     };
   }
 
+  // Policy: avoid "retargeting" edits when user asked for specific elements.
+  const originalOps = patchRes.data.ops;
+  const filteredOps: typeof originalOps = [];
+  let skippedPolicy = 0;
+  for (const op of originalOps) {
+    const slideIndex = typeof op.slideIndex === "number" ? op.slideIndex : null;
+    if (typeof parsed.data.slideIndex === "number" && slideIndex !== parsed.data.slideIndex) {
+      skippedPolicy++;
+      continue;
+    }
+    const key = `${op.slideIndex}:${op.objectId}`;
+    if (allowedTargets.size > 0 && !allowedTargets.has(key)) {
+      skippedPolicy++;
+      continue;
+    }
+    filteredOps.push(op);
+  }
+
   // Convert image regeneration ops into concrete assets (set_asset).
   const admin = createSupabaseAdminClientIfAvailable();
   const supabaseForInsert = admin ?? supabase;
@@ -807,7 +976,7 @@ export async function applyNaturalLanguageEdit(input: {
   const setAssetOps: Array<{ op: "set_asset"; slideIndex: number; objectId: string; assetId: string }> = [];
   const newAssets: Array<{ id: string; signedUrl: string | null }> = [];
 
-  for (const op of patchRes.data.ops) {
+  for (const op of filteredOps) {
     if (op.op !== "regenerate_image") continue;
     const slideIndex = typeof op.slideIndex === "number" ? op.slideIndex : null;
     if (!slideIndex) continue;
@@ -874,7 +1043,7 @@ export async function applyNaturalLanguageEdit(input: {
   const patchForApply = {
     ...patchRes.data,
     ops: [
-      ...patchRes.data.ops.filter((op) => op.op !== "regenerate_image"),
+      ...filteredOps.filter((op) => op.op !== "regenerate_image"),
       ...setAssetOps
     ]
   };
@@ -884,6 +1053,44 @@ export async function applyNaturalLanguageEdit(input: {
     locks: carousel.element_locks as unknown,
     patch: patchForApply
   });
+
+  // Count locks in a user-meaningful way: include both (a) ops skipped due to lock and
+  // (b) elements the user requested that are locked (even if model didn't emit an op).
+  const blockedTargets = new Set<string>();
+  for (const op of applied.skippedLockedOps) {
+    const s = typeof op.slideIndex === "number" ? op.slideIndex : null;
+    if (!s) continue;
+    blockedTargets.add(`${s}:${op.objectId}`);
+  }
+  for (const key of allowedTargets) {
+    const [sRaw, objectId] = key.split(":");
+    const slideIndex = Number(sRaw);
+    if (!Number.isFinite(slideIndex) || !objectId) continue;
+    const slideMeta = slideIdMap.get(slideIndex);
+    if (
+      isLocked({
+        locks: carousel.element_locks as unknown,
+        slideId: slideMeta?.slideId ?? undefined,
+        slideIndex,
+        objectId
+      })
+    ) {
+      blockedTargets.add(`${slideIndex}:${objectId}`);
+    }
+  }
+
+  const appliedOps = applied.appliedOps;
+  const didText =
+    appliedOps.some((o) => o.op === "set_text") || appliedOps.some((o) => o.op === "set_style");
+  const didMove = appliedOps.some((o) => o.op === "move");
+  const didImage = appliedOps.some((o) => o.op === "set_asset");
+  const summaryParts: string[] = [];
+  if (didText) summaryParts.push("Atualizou texto/estilo");
+  if (didMove) summaryParts.push("Moveu elementos");
+  if (didImage) summaryParts.push("Atualizou imagem");
+  if (summaryParts.length === 0) summaryParts.push("Nenhuma alteração aplicada");
+  if (blockedTargets.size > 0) summaryParts.push(`Locks respeitados: ${blockedTargets.size}`);
+  if (skippedPolicy > 0) summaryParts.push(`Ignorados por política: ${skippedPolicy}`);
 
   const prevMeta =
     carousel.generation_meta && typeof carousel.generation_meta === "object"
@@ -919,8 +1126,15 @@ export async function applyNaturalLanguageEdit(input: {
     applied: applied.applied,
     skippedLocked: applied.skippedLocked,
     skippedMissing: applied.skippedMissing,
-    summary: patchRes.data.summary ?? null,
+    skippedPolicy,
+    blockedByLock: blockedTargets.size,
+    summary: summaryParts.join(" · "),
     nextState: applied.nextState,
     newAssets
   };
+}
+
+function currentStateSchemaFallback(editorState: unknown) {
+  const parsed = editorStateSchema.safeParse(editorState);
+  return parsed.success ? parsed.data : ({ version: 1, slides: [] } as unknown);
 }

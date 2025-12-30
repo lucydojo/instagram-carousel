@@ -46,6 +46,9 @@ export function applyEditPatch(input: {
   applied: number;
   skippedLocked: number;
   skippedMissing: number;
+  appliedOps: Array<{ op: string; slideIndex?: number; slideId?: string; objectId: string }>;
+  skippedLockedOps: Array<{ op: string; slideIndex?: number; slideId?: string; objectId: string }>;
+  skippedMissingOps: Array<{ op: string; slideIndex?: number; slideId?: string; objectId: string }>;
 } {
   const nextState = clone(input.editorState);
   nextState.slides = Array.isArray(nextState.slides) ? nextState.slides : [];
@@ -53,6 +56,20 @@ export function applyEditPatch(input: {
   let applied = 0;
   let skippedLocked = 0;
   let skippedMissing = 0;
+  const appliedOps: Array<{ op: string; slideIndex?: number; slideId?: string; objectId: string }> =
+    [];
+  const skippedLockedOps: Array<{
+    op: string;
+    slideIndex?: number;
+    slideId?: string;
+    objectId: string;
+  }> = [];
+  const skippedMissingOps: Array<{
+    op: string;
+    slideIndex?: number;
+    slideId?: string;
+    objectId: string;
+  }> = [];
 
   for (const op of input.patch.ops) {
     const slide = getSlideByTarget(nextState, op);
@@ -62,6 +79,12 @@ export function applyEditPatch(input: {
 
     if (!slide) {
       skippedMissing++;
+      skippedMissingOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
@@ -74,18 +97,36 @@ export function applyEditPatch(input: {
       })
     ) {
       skippedLocked++;
+      skippedLockedOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
     const obj = findObject(slide, op.objectId);
     if (!obj) {
       skippedMissing++;
+      skippedMissingOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
     if (op.op === "set_text") {
       obj.text = op.text;
       applied++;
+      appliedOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
@@ -94,18 +135,36 @@ export function applyEditPatch(input: {
         (obj as Record<string, unknown>)[k] = v;
       }
       applied++;
+      appliedOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
     if (op.op === "set_asset") {
       (obj as Record<string, unknown>).assetId = op.assetId;
       applied++;
+      appliedOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
     if (op.op === "regenerate_image") {
       // Handled upstream (server action generates an asset and converts to `set_asset`).
       skippedMissing++;
+      skippedMissingOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
 
@@ -113,9 +172,23 @@ export function applyEditPatch(input: {
       if (typeof op.x === "number") obj.x = op.x;
       if (typeof op.y === "number") obj.y = op.y;
       applied++;
+      appliedOps.push({
+        op: op.op,
+        slideIndex: typeof slideIndex === "number" ? slideIndex : undefined,
+        slideId,
+        objectId: op.objectId
+      });
       continue;
     }
   }
 
-  return { nextState, applied, skippedLocked, skippedMissing };
+  return {
+    nextState,
+    applied,
+    skippedLocked,
+    skippedMissing,
+    appliedOps,
+    skippedLockedOps,
+    skippedMissingOps
+  };
 }

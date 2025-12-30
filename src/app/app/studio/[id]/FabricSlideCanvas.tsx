@@ -207,6 +207,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   const emitTimerRef = React.useRef<number | null>(null);
   const nextSlideRef = React.useRef<SlideV1 | null>(null);
   const slideRef = React.useRef(slide);
+  const onSlideChangeRef = React.useRef<Props["onSlideChange"]>(() => {});
   const clipboardRef = React.useRef<{ objects: SlideObjectV1[]; pasteN: number } | null>(
     null
   );
@@ -233,16 +234,17 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     onSelectionChangeRef.current = onSelectionChange ?? null;
   }, [onSelectionChange]);
 
-  const emit = React.useCallback(
-    (next: SlideV1) => {
-      nextSlideRef.current = next;
-      if (emitTimerRef.current) window.clearTimeout(emitTimerRef.current);
-      emitTimerRef.current = window.setTimeout(() => {
-        if (nextSlideRef.current) onSlideChange(nextSlideRef.current);
-      }, 120);
-    },
-    [onSlideChange]
-  );
+  React.useEffect(() => {
+    onSlideChangeRef.current = onSlideChange;
+  }, [onSlideChange]);
+
+  const emit = React.useCallback((next: SlideV1) => {
+    nextSlideRef.current = next;
+    if (emitTimerRef.current) window.clearTimeout(emitTimerRef.current);
+    emitTimerRef.current = window.setTimeout(() => {
+      if (nextSlideRef.current) onSlideChangeRef.current(nextSlideRef.current);
+    }, 120);
+  }, []);
 
   React.useEffect(() => {
     return () => {
@@ -961,7 +963,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       fabricRef.current = null;
     };
     // We intentionally don't depend on `slide` here; events use `slideRef`.
-  }, [emit, scheduleToolbarUpdate]);
+  }, [scheduleToolbarUpdate]);
 
   const fitCanvas = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -1001,184 +1003,195 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       const token = (renderTokenRef.current += 1);
       isHydratingRef.current = true;
-      canvas.clear();
+      try {
+        canvas.clear();
 
-      const bgColor = slide.background?.color ?? "#ffffff";
-      canvas.backgroundColor = bgColor;
+        const bgColor = slide.background?.color ?? "#ffffff";
+        canvas.backgroundColor = bgColor;
 
-      const slideW = clampNumber(slide.width, 1080);
-      const slideH = clampNumber(slide.height, 1080);
+        const slideW = clampNumber(slide.width, 1080);
+        const slideH = clampNumber(slide.height, 1080);
 
-      // 1) Images (behind text)
-      for (const [idx, raw] of (slide.objects ?? []).entries()) {
-        if (!raw || typeof raw !== "object") continue;
-        if (raw.type !== "image") continue;
+        // 1) Images (behind text)
+        for (const [idx, raw] of (slide.objects ?? []).entries()) {
+          if (!raw || typeof raw !== "object") continue;
+          if (raw.type !== "image") continue;
 
-      const id = raw.id ?? `obj_${idx + 1}`;
-      const assetId = typeof raw.assetId === "string" ? raw.assetId : null;
-      if (!assetId) continue;
-      const url = typeof assetUrlsById?.[assetId] === "string" ? assetUrlsById?.[assetId] : null;
-      if (!url) continue;
+          const id = raw.id ?? `obj_${idx + 1}`;
+          const assetId = typeof raw.assetId === "string" ? raw.assetId : null;
+          if (!assetId) continue;
+          const url =
+            typeof assetUrlsById?.[assetId] === "string" ? assetUrlsById?.[assetId] : null;
+          if (!url) continue;
 
-      const x = clampNumber(raw.x, 0);
-      const y = clampNumber(raw.y, 0);
-      const width = clampNumber(raw.width, Math.max(1, slideW - 160));
-      const height = clampNumber(raw.height, Math.max(1, width));
+          const x = clampNumber(raw.x, 0);
+          const y = clampNumber(raw.y, 0);
+          const width = clampNumber(raw.width, Math.max(1, slideW - 160));
+          const height = clampNumber(raw.height, Math.max(1, width));
 
-      Image.fromURL(url, { crossOrigin: "anonymous" })
-        .then((img) => {
-          // Ignore if we re-rendered since the request started.
-          if (renderTokenRef.current !== token) return;
-          if (!fabricRef.current) return;
+          Image.fromURL(url, { crossOrigin: "anonymous" })
+            .then((img) => {
+              // Ignore if we re-rendered since the request started.
+              if (renderTokenRef.current !== token) return;
+              if (!fabricRef.current) return;
 
-          const iw = clampNumber((img as unknown as { width?: unknown }).width, 1);
-          const ih = clampNumber((img as unknown as { height?: unknown }).height, 1);
-          const slotAspect = width / Math.max(1, height);
-          const imgAspect = iw / Math.max(1, ih);
+              const iw = clampNumber((img as unknown as { width?: unknown }).width, 1);
+              const ih = clampNumber((img as unknown as { height?: unknown }).height, 1);
+              const slotAspect = width / Math.max(1, height);
+              const imgAspect = iw / Math.max(1, ih);
 
-          let cropW = iw;
-          let cropH = ih;
-          let cropX = 0;
-          let cropY = 0;
-          if (imgAspect > slotAspect) {
-            // Wider than slot: crop horizontally.
-            cropW = Math.round(ih * slotAspect);
-            cropH = ih;
-            cropX = Math.round((iw - cropW) / 2);
-            cropY = 0;
-          } else if (imgAspect < slotAspect) {
-            // Taller than slot: crop vertically.
-            cropW = iw;
-            cropH = Math.round(iw / slotAspect);
-            cropX = 0;
-            cropY = Math.round((ih - cropH) / 2);
-          }
+              let cropW = iw;
+              let cropH = ih;
+              let cropX = 0;
+              let cropY = 0;
+              if (imgAspect > slotAspect) {
+                // Wider than slot: crop horizontally.
+                cropW = Math.round(ih * slotAspect);
+                cropH = ih;
+                cropX = Math.round((iw - cropW) / 2);
+                cropY = 0;
+              } else if (imgAspect < slotAspect) {
+                // Taller than slot: crop vertically.
+                cropW = iw;
+                cropH = Math.round(iw / slotAspect);
+                cropX = 0;
+                cropY = Math.round((ih - cropH) / 2);
+              }
 
-          const scale = width / Math.max(1, cropW);
+              const scale = width / Math.max(1, cropW);
 
-          img.set({
+              img.set({
+                left: 0,
+                top: 0,
+                cropX,
+                cropY,
+                width: cropW,
+                height: cropH,
+                scaleX: scale,
+                scaleY: scale,
+                selectable: false,
+                evented: false
+              });
+
+              const frame = new Group([img], {
+                left: x,
+                top: y,
+                originX: "left",
+                originY: "top",
+                selectable: true,
+                evented: true,
+                hasControls: true,
+                hasBorders: true,
+                borderColor: "#7c3aed",
+                cornerStyle: "circle",
+                cornerColor: "#7c3aed",
+                transparentCorners: false
+              });
+              setObjectId(frame as unknown as FabricObject, id);
+              frame.clipPath = new Rect({
+                left: 0,
+                top: 0,
+                width,
+                height,
+                rx: 18,
+                ry: 18
+              });
+
+              canvas.add(frame);
+              canvas.sendObjectToBack(frame);
+              canvas.requestRenderAll();
+            })
+            .catch(() => {
+              // ignore load errors
+            });
+        }
+
+        // 1.5) Overlay (global/per-slide background readability)
+        const overlay = slide.background?.overlay;
+        if (overlay?.enabled) {
+          const opacity =
+            typeof overlay.opacity === "number" && Number.isFinite(overlay.opacity)
+              ? Math.min(0.95, Math.max(0, overlay.opacity))
+              : 0.35;
+          const color = typeof overlay.color === "string" ? overlay.color : "#000000";
+          const rect = new Rect({
             left: 0,
             top: 0,
-            cropX,
-            cropY,
-            width: cropW,
-            height: cropH,
-            scaleX: scale,
-            scaleY: scale,
+            width: slideW,
+            height: slideH,
+            originX: "left",
+            originY: "top",
+            fill: color,
+            opacity,
             selectable: false,
             evented: false
           });
+          canvas.add(rect);
+          canvas.requestRenderAll();
+        }
 
-          const frame = new Group([img], {
+        // 2) Text
+        for (const [idx, raw] of (slide.objects ?? []).entries()) {
+          if (!raw || typeof raw !== "object") continue;
+          if (raw.type !== "text") continue;
+
+          const id = raw.id ?? `obj_${idx + 1}`;
+          const text = raw.text ?? "";
+          const x = clampNumber(raw.x, 80);
+          const y = clampNumber(raw.y, 240);
+          const width = clampNumber(raw.width, Math.max(240, slideW - 160));
+
+          const textbox = new Textbox(text, {
             left: x,
             top: y,
+            width,
             originX: "left",
             originY: "top",
-            selectable: true,
-            evented: true,
-            hasControls: true,
-            hasBorders: true,
-            borderColor: "#7c3aed",
-            cornerStyle: "circle",
-            cornerColor: "#7c3aed",
-            transparentCorners: false
-          });
-          setObjectId(frame as unknown as FabricObject, id);
-          frame.clipPath = new Rect({
-            left: 0,
-            top: 0,
-            width,
-            height,
-            rx: 18,
-            ry: 18
+            // Use a reliably available font stack to keep text measurement stable
+            // (cursor positioning depends on accurate glyph metrics).
+            fontFamily: toFontStack(raw.fontFamily),
+            fontSize: clampNumber(raw.fontSize, 56),
+            fontWeight: clampNumber(raw.fontWeight, 600),
+            fill: raw.fill ?? "#111827",
+            textAlign: raw.textAlign ?? "left",
+            fontStyle: raw.fontStyle ?? "normal",
+            lineHeight: clampNumber(raw.lineHeight, 1.2),
+            charSpacing: toFabricCharSpacing(
+              typeof raw.letterSpacing === "number" ? raw.letterSpacing : 0,
+              clampNumber(raw.fontSize, 56)
+            ),
+            underline: Boolean(raw.underline),
+            linethrough: Boolean(raw.linethrough),
+            editable: true
           });
 
-          canvas.add(frame);
-          canvas.sendObjectToBack(frame);
+          setObjectId(textbox, id);
+          const variantRaw =
+            typeof raw.variant === "string"
+              ? (raw.variant as TextVariant)
+              : id === "title"
+                ? "title"
+                : id === "cta"
+                  ? "cta"
+                  : id === "tagline"
+                    ? "tagline"
+                    : "body";
+          setObjectVariant(textbox, variantRaw);
+          canvas.add(textbox);
+        }
+
+        fitCanvas();
+        canvas.renderAll();
+      } catch (err) {
+        console.error("FabricSlideCanvas: renderSlide failed", err);
+        try {
           canvas.requestRenderAll();
-        })
-        .catch(() => {
-          // ignore load errors
-        });
-    }
-
-    // 1.5) Overlay (global/per-slide background readability)
-    const overlay = slide.background?.overlay;
-    if (overlay?.enabled) {
-      const opacity =
-        typeof overlay.opacity === "number" && Number.isFinite(overlay.opacity)
-          ? Math.min(0.95, Math.max(0, overlay.opacity))
-          : 0.35;
-      const color = typeof overlay.color === "string" ? overlay.color : "#000000";
-      const rect = new Rect({
-        left: 0,
-        top: 0,
-        width: slideW,
-        height: slideH,
-        originX: "left",
-        originY: "top",
-        fill: color,
-        opacity,
-        selectable: false,
-        evented: false
-      });
-      canvas.add(rect);
-      canvas.requestRenderAll();
-    }
-
-    // 2) Text
-    for (const [idx, raw] of (slide.objects ?? []).entries()) {
-      if (!raw || typeof raw !== "object") continue;
-      if (raw.type !== "text") continue;
-
-      const id = raw.id ?? `obj_${idx + 1}`;
-      const text = raw.text ?? "";
-      const x = clampNumber(raw.x, 80);
-      const y = clampNumber(raw.y, 240);
-      const width = clampNumber(raw.width, Math.max(240, slideW - 160));
-
-      const textbox = new Textbox(text, {
-        left: x,
-        top: y,
-        width,
-        originX: "left",
-        originY: "top",
-        // Use a reliably available font stack to keep text measurement stable
-        // (cursor positioning depends on accurate glyph metrics).
-        fontFamily: toFontStack(raw.fontFamily),
-        fontSize: clampNumber(raw.fontSize, 56),
-        fontWeight: clampNumber(raw.fontWeight, 600),
-        fill: raw.fill ?? "#111827",
-        textAlign: raw.textAlign ?? "left",
-        fontStyle: raw.fontStyle ?? "normal",
-        lineHeight: clampNumber(raw.lineHeight, 1.2),
-        charSpacing: toFabricCharSpacing(
-          typeof raw.letterSpacing === "number" ? raw.letterSpacing : 0,
-          clampNumber(raw.fontSize, 56)
-        ),
-        underline: Boolean(raw.underline),
-        linethrough: Boolean(raw.linethrough),
-        editable: true
-      });
-
-      setObjectId(textbox, id);
-      const variantRaw =
-        typeof raw.variant === "string"
-          ? (raw.variant as TextVariant)
-          : id === "title"
-            ? "title"
-            : id === "cta"
-              ? "cta"
-              : id === "tagline"
-                ? "tagline"
-                : "body";
-      setObjectVariant(textbox, variantRaw);
-      canvas.add(textbox);
-    }
-
-    fitCanvas();
-    canvas.renderAll();
-    isHydratingRef.current = false;
+        } catch {
+          // ignore
+        }
+      } finally {
+        isHydratingRef.current = false;
+      }
   }, [assetUrlsById, fitCanvas, slide]);
 
   React.useEffect(() => {
