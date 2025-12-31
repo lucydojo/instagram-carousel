@@ -386,6 +386,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   }, [cropModeId]);
 
   React.useEffect(() => {
+    // If the active image changes (or the toolbar disappears), reset transient
+    // draft/focus state so sliders don't "stick" across different images.
+    setCornerRoundingFocused(false);
+    setCornerRoundingDraft("");
+  }, [imageToolbar?.id]);
+
+  React.useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange ?? null;
   }, [onSelectionChange]);
 
@@ -667,6 +674,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         imgObj.set({
           left: 0,
           top: 0,
+          originX: "left",
+          originY: "top",
           cropX: crop.cropX,
           cropY: crop.cropY,
           width: crop.cropW,
@@ -703,6 +712,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         strokeRect.set({
           left: 0,
           top: 0,
+          originX: "left",
+          originY: "top",
           width: Math.max(1, frameW),
           height: Math.max(1, frameH),
           rx: Math.max(0, radiusPx),
@@ -1590,11 +1601,20 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               const meta: ImageMeta = { naturalWidth: iw, naturalHeight: ih };
 
               const img = new Image(el);
-              img.set({ left: 0, top: 0, selectable: false, evented: false });
+              img.set({
+                left: 0,
+                top: 0,
+                originX: "left",
+                originY: "top",
+                selectable: false,
+                evented: false
+              });
 
               const innerClip = new Rect({
                 left: 0,
                 top: 0,
+                originX: "left",
+                originY: "top",
                 width,
                 height,
                 rx: 0,
@@ -1615,6 +1635,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               const strokeRect = new Rect({
                 left: 0,
                 top: 0,
+                originX: "left",
+                originY: "top",
                 width,
                 height,
                 fill: "rgba(0,0,0,0)",
