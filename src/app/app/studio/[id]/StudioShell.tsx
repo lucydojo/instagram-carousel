@@ -185,11 +185,6 @@ type TypographyV1 = {
 
 type OverlayV1 = { enabled: boolean; opacity: number; color: string };
 
-type SlideOverridesV1 = {
-  paletteId?: string | null;
-  typography?: Partial<TypographyV1> | null;
-};
-
 type PaletteOption = {
   id: string;
   name: string;
@@ -719,12 +714,6 @@ export default function StudioShell(props: Props) {
   const selectedSlide =
     slidesFromState.length > 0 ? slidesFromState[selectedSlideIndex - 1] : null;
 
-  const selectedSlideOverrides = React.useMemo((): SlideOverridesV1 => {
-    if (!selectedSlide || typeof selectedSlide !== "object") return {};
-    const raw = (selectedSlide as Record<string, unknown>).overrides;
-    if (!raw || typeof raw !== "object") return {};
-    return raw as SlideOverridesV1;
-  }, [selectedSlide]);
   const currentSlideKey = React.useMemo(() => {
     const rawId =
       selectedSlide && typeof selectedSlide === "object"
@@ -1055,18 +1044,6 @@ export default function StudioShell(props: Props) {
         const nextSlides = prevSlides.map((s) => {
           if (!s || typeof s !== "object") return s;
           const slideObj = s as Record<string, unknown>;
-          const overrides =
-            slideObj.overrides && typeof slideObj.overrides === "object"
-              ? (slideObj.overrides as SlideOverridesV1)
-              : null;
-          if (
-            overrides &&
-            typeof overrides.paletteId === "string" &&
-            overrides.paletteId.trim().length > 0 &&
-            overrides.paletteId !== paletteId
-          ) {
-            return s;
-          }
           const objects = Array.isArray(slideObj.objects)
             ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
             : [];
@@ -1120,13 +1097,6 @@ export default function StudioShell(props: Props) {
         const nextSlides = prevSlides.map((s) => {
           if (!s || typeof s !== "object") return s;
           const slideObj = s as Record<string, unknown>;
-          const overrides =
-            slideObj.overrides && typeof slideObj.overrides === "object"
-              ? (slideObj.overrides as SlideOverridesV1)
-              : null;
-          if (overrides && overrides.typography && typeof overrides.typography === "object") {
-            return s;
-          }
           const objects = Array.isArray(slideObj.objects)
             ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
             : [];
@@ -1514,10 +1484,6 @@ export default function StudioShell(props: Props) {
   const saveEditorStateAction = studioSaveEditorState;
 
   const leftShiftPx = leftOpen ? 220 : 0;
-  const slideTypography = React.useMemo(() => {
-    if (!selectedSlideOverrides.typography) return globalTypography;
-    return { ...globalTypography, ...(selectedSlideOverrides.typography as Partial<TypographyV1>) };
-  }, [globalTypography, selectedSlideOverrides.typography]);
   const hasBackgroundImageZone = React.useMemo(
     () => effectiveTemplate.images.some((img) => img.kind === "background"),
     [effectiveTemplate.images]
@@ -1589,10 +1555,8 @@ export default function StudioShell(props: Props) {
       .filter((v): v is NonNullable<typeof v> => Boolean(v));
   }, [canvasSlide.height, canvasSlide.objects, canvasSlide.width, currentSlideKey, elementLocks]);
 
-  const assignAssetToSlot = React.useCallback(
-    (assetId: string) => {
-      if (!slotPicker) return;
-      const { slideIndex, slotId } = slotPicker;
+  const assignAssetToSpecificSlot = React.useCallback(
+    (slideIndex: number, slotId: string, assetId: string) => {
       setEditorState((prev) => {
         const prevSlides = Array.isArray(prev.slides)
           ? ([...(prev.slides as SlideLike[])] as SlideLike[])
@@ -1653,9 +1617,18 @@ export default function StudioShell(props: Props) {
       });
       setDirty(true);
       setCanvasRevision((v) => v + 1);
+    },
+    [effectiveTemplate.images, props.slides]
+  );
+
+  const assignAssetToSlot = React.useCallback(
+    (assetId: string) => {
+      if (!slotPicker) return;
+      const { slideIndex, slotId } = slotPicker;
+      assignAssetToSpecificSlot(slideIndex, slotId, assetId);
       setSlotPicker(null);
     },
-    [effectiveTemplate.images, props.slides, slotPicker]
+    [assignAssetToSpecificSlot, slotPicker]
   );
 
   const insertAssetIntoSlide = React.useCallback(
@@ -1711,47 +1684,6 @@ export default function StudioShell(props: Props) {
       setCanvasRevision((v) => v + 1);
     },
     [props.slides, selectedSlideIndex]
-  );
-
-  const removeAssetFromSlot = React.useCallback(
-    (slideIndex: number, slotId: string) => {
-      setEditorState((prev) => {
-        const prevSlides = Array.isArray(prev.slides)
-          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
-          : [...props.slides];
-
-        const idx = slideIndex - 1;
-        const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
-        if (!slide || typeof slide !== "object") return prev;
-
-        const entry = getHistoryEntry(slideIndex);
-        const snapshot = JSON.stringify(slide);
-        const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
-        if (snapshot !== last) entry.past.push(snapshot);
-        entry.future = [];
-        entry.lastPushedAt = Date.now();
-
-        const slideObj = slide as Record<string, unknown>;
-        const objects = Array.isArray(slideObj.objects)
-          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
-          : [];
-        const nextObjects = objects.filter((o) => {
-          if (o.type !== "image") return true;
-          const oSlot = typeof o.slotId === "string" ? o.slotId : null;
-          if (oSlot === slotId) return false;
-          const id = typeof o.id === "string" ? o.id : null;
-          if (id === slotId || id === `image_${slotId}`) return false;
-          return true;
-        });
-
-        const nextSlide = { ...slideObj, objects: nextObjects };
-        prevSlides[idx] = nextSlide;
-        return { ...prev, slides: prevSlides };
-      });
-      setDirty(true);
-      setCanvasRevision((v) => v + 1);
-    },
-    [props.slides]
   );
 
   const toggleBackgroundImageVisibility = React.useCallback(
@@ -1838,20 +1770,44 @@ export default function StudioShell(props: Props) {
         });
 
         if (!found && visible) {
-          const zone =
-            role === "title"
-              ? effectiveTemplate.zones.title
-              : role === "body"
-                ? effectiveTemplate.zones.body
-                : role === "cta"
-                  ? effectiveTemplate.zones.cta
-                  : role === "tagline"
-                    ? effectiveTemplate.zones.tagline
-                    : role === "swipe"
-                      ? effectiveTemplate.zones.swipe
-                      : undefined;
-          if (zone) {
-            const rect = rectToPx(zone, w, h);
+          let rect: { x: number; y: number; w: number; h: number } | null = null;
+          if (role === "title") rect = rectToPx(effectiveTemplate.zones.title, w, h);
+          else if (role === "body" && effectiveTemplate.zones.body)
+            rect = rectToPx(effectiveTemplate.zones.body, w, h);
+          else if (role === "cta" && effectiveTemplate.zones.cta)
+            rect = rectToPx(effectiveTemplate.zones.cta, w, h);
+          else if (role === "tagline" && effectiveTemplate.zones.tagline)
+            rect = rectToPx(effectiveTemplate.zones.tagline, w, h);
+          else if (role === "swipe" && effectiveTemplate.zones.swipe)
+            rect = rectToPx(effectiveTemplate.zones.swipe, w, h);
+
+          // Fallbacks: if the template doesn't define a zone, place the element near the title/body.
+          if (!rect && role === "tagline") {
+            const titleRect = rectToPx(effectiveTemplate.zones.title, w, h);
+            rect = {
+              x: titleRect.x,
+              y: Math.max(0, titleRect.y - Math.round(titleRect.h * 0.6)),
+              w: titleRect.w,
+              h: Math.max(24, Math.round(titleRect.h * 0.35))
+            };
+          } else if (!rect && role === "cta" && effectiveTemplate.zones.body) {
+            const bodyRect = rectToPx(effectiveTemplate.zones.body, w, h);
+            rect = {
+              x: bodyRect.x,
+              y: Math.min(h - 48, bodyRect.y + bodyRect.h + Math.round(h * 0.04)),
+              w: bodyRect.w,
+              h: Math.max(28, Math.round(h * 0.08))
+            };
+          } else if (!rect && role === "swipe") {
+            rect = {
+              x: Math.round(w * 0.82),
+              y: Math.round(h * 0.9),
+              w: Math.max(120, Math.round(w * 0.12)),
+              h: Math.max(42, Math.round(h * 0.06))
+            };
+          }
+
+          if (rect) {
             const id = role;
             const isTitle = role === "title";
             const isBody = role === "body";
@@ -1886,14 +1842,20 @@ export default function StudioShell(props: Props) {
                 : isBody
                   ? globalTypography.bodySize
                   : isCta
-                    ? globalTypography.ctaSize ?? Math.max(14, Math.round(globalTypography.bodySize * 0.82))
+                    ? globalTypography.ctaSize ??
+                      Math.max(14, Math.round(globalTypography.bodySize * 0.82))
                     : isTagline
-                      ? globalTypography.taglineSize ?? Math.max(14, Math.round(globalTypography.bodySize * 0.6))
+                      ? globalTypography.taglineSize ??
+                        Math.max(14, Math.round(globalTypography.bodySize * 0.6))
                       : 24,
               fill: isTitle ? appliedPalette.accent : appliedPalette.text,
               fontWeight: isTitle ? 700 : 600,
-              lineHeight: isTitle ? (globalTypography.titleLineHeight ?? 1.1) : (globalTypography.bodyLineHeight ?? 1.25),
-              letterSpacing: isTitle ? (globalTypography.titleSpacing ?? 0) : (globalTypography.bodySpacing ?? 0)
+              lineHeight: isTitle
+                ? globalTypography.titleLineHeight ?? 1.1
+                : globalTypography.bodyLineHeight ?? 1.25,
+              letterSpacing: isTitle
+                ? globalTypography.titleSpacing ?? 0
+                : globalTypography.bodySpacing ?? 0
             });
           }
         }
@@ -1906,223 +1868,6 @@ export default function StudioShell(props: Props) {
       setCanvasRevision((v) => v + 1);
     },
     [appliedPalette.accent, appliedPalette.text, effectiveTemplate.zones, globalTypography, props.slides, selectedSlideIndex]
-  );
-
-  const applyPaletteToSlide = React.useCallback(
-    (slideIndex: number, palette: PaletteV1, paletteId: string | null) => {
-      setEditorState((prev) => {
-        const prevSlides = Array.isArray(prev.slides)
-          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
-          : [...props.slides];
-        const idx = slideIndex - 1;
-        const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
-        if (!slide || typeof slide !== "object") return prev;
-
-        const entry = getHistoryEntry(slideIndex);
-        const snapshot = JSON.stringify(slide);
-        const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
-        if (snapshot !== last) entry.past.push(snapshot);
-        entry.future = [];
-        entry.lastPushedAt = Date.now();
-
-        const slideObj = slide as Record<string, unknown>;
-        const objects = Array.isArray(slideObj.objects)
-          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
-          : [];
-        const nextObjects = objects.map((o) => {
-          if (o.type !== "text") return o;
-          const id = typeof o.id === "string" ? o.id : null;
-          const variant =
-            typeof (o as Record<string, unknown>).variant === "string"
-              ? String((o as Record<string, unknown>).variant)
-              : null;
-          const key = id === "swipe" ? "body" : (variant ?? id ?? "body");
-          const fill = key === "title" ? palette.accent : palette.text;
-          return { ...o, fill };
-        });
-
-        const background =
-          slideObj.background && typeof slideObj.background === "object"
-            ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<string, unknown>)
-            : {};
-        background.color = palette.background;
-
-        const prevOverrides =
-          slideObj.overrides && typeof slideObj.overrides === "object"
-            ? ({ ...(slideObj.overrides as Record<string, unknown>) } as Record<string, unknown>)
-            : {};
-        const nextOverrides = {
-          ...prevOverrides,
-          paletteId
-        };
-
-        const nextSlide = { ...slideObj, background, objects: nextObjects, overrides: nextOverrides };
-        prevSlides[idx] = nextSlide;
-        return { ...prev, slides: prevSlides };
-      });
-      setDirty(true);
-      setCanvasRevision((v) => v + 1);
-    },
-    [props.slides]
-  );
-
-  const clearSlidePaletteOverride = React.useCallback(
-    (slideIndex: number) => {
-      setEditorState((prev) => {
-        const prevSlides = Array.isArray(prev.slides)
-          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
-          : [...props.slides];
-        const idx = slideIndex - 1;
-        const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
-        if (!slide || typeof slide !== "object") return prev;
-        const slideObj = slide as Record<string, unknown>;
-
-        const entry = getHistoryEntry(slideIndex);
-        const snapshot = JSON.stringify(slide);
-        const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
-        if (snapshot !== last) entry.past.push(snapshot);
-        entry.future = [];
-        entry.lastPushedAt = Date.now();
-
-        const objects = Array.isArray(slideObj.objects)
-          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
-          : [];
-        const nextObjects = objects.map((o) => {
-          if (o.type !== "text") return o;
-          const id = typeof o.id === "string" ? o.id : null;
-          const variant =
-            typeof (o as Record<string, unknown>).variant === "string"
-              ? String((o as Record<string, unknown>).variant)
-              : null;
-          const key = id === "swipe" ? "body" : (variant ?? id ?? "body");
-          const fill = key === "title" ? appliedPalette.accent : appliedPalette.text;
-          return { ...o, fill };
-        });
-
-        const background =
-          slideObj.background && typeof slideObj.background === "object"
-            ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<string, unknown>)
-            : {};
-        background.color = appliedPalette.background;
-
-        const prevOverrides =
-          slideObj.overrides && typeof slideObj.overrides === "object"
-            ? ({ ...(slideObj.overrides as Record<string, unknown>) } as Record<string, unknown>)
-            : {};
-        const nextOverrides = { ...prevOverrides, paletteId: null };
-        const nextSlide = { ...slideObj, background, objects: nextObjects, overrides: nextOverrides };
-        prevSlides[idx] = nextSlide;
-        return { ...prev, slides: prevSlides };
-      });
-      setDirty(true);
-      setCanvasRevision((v) => v + 1);
-    },
-    [appliedPalette, props.slides]
-  );
-
-  const applyTypographyToSlide = React.useCallback(
-    (slideIndex: number, typography: TypographyV1, persistOverride: boolean) => {
-      setEditorState((prev) => {
-        const prevSlides = Array.isArray(prev.slides)
-          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
-          : [...props.slides];
-        const idx = slideIndex - 1;
-        const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
-        if (!slide || typeof slide !== "object") return prev;
-
-        const entry = getHistoryEntry(slideIndex);
-        const snapshot = JSON.stringify(slide);
-        const last = entry.past.length > 0 ? entry.past[entry.past.length - 1] : null;
-        if (snapshot !== last) entry.past.push(snapshot);
-        entry.future = [];
-        entry.lastPushedAt = Date.now();
-
-        const slideObj = slide as Record<string, unknown>;
-        const objects = Array.isArray(slideObj.objects)
-          ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
-          : [];
-        const nextObjects = objects.map((o) => {
-          if (o.type !== "text") return o;
-          const id = typeof o.id === "string" ? o.id : null;
-          const variant =
-            typeof (o as Record<string, unknown>).variant === "string"
-              ? String((o as Record<string, unknown>).variant)
-              : null;
-          const key = id === "swipe" ? "body" : (variant ?? id ?? "body");
-          const nextFontSize =
-            key === "title"
-              ? typography.titleSize
-              : key === "body"
-                ? typography.bodySize
-                : key === "cta" && typeof typography.ctaSize === "number"
-                  ? typography.ctaSize
-                  : key === "tagline" && typeof typography.taglineSize === "number"
-                    ? typography.taglineSize
-                    : (o.fontSize as unknown as number | undefined);
-          const nextFontFamily =
-            key === "title"
-              ? typography.titleFontFamily
-              : key === "body"
-                ? typography.bodyFontFamily
-                : key === "cta"
-                  ? typography.ctaFontFamily ?? typography.bodyFontFamily
-                  : key === "tagline"
-                    ? typography.taglineFontFamily ?? typography.bodyFontFamily
-                    : typography.bodyFontFamily;
-          return {
-            ...o,
-            fontFamily: nextFontFamily,
-            ...(typeof nextFontSize === "number" ? { fontSize: nextFontSize } : null),
-            ...(typeof typography.titleLineHeight === "number" && key === "title"
-              ? { lineHeight: typography.titleLineHeight }
-              : null),
-            ...(typeof typography.bodyLineHeight === "number" && key === "body"
-              ? { lineHeight: typography.bodyLineHeight }
-              : null),
-            ...(typeof typography.ctaLineHeight === "number" && key === "cta"
-              ? { lineHeight: typography.ctaLineHeight }
-              : null),
-            ...(typeof typography.taglineLineHeight === "number" && key === "tagline"
-              ? { lineHeight: typography.taglineLineHeight }
-              : null),
-            ...(typeof typography.titleSpacing === "number" && key === "title"
-              ? { letterSpacing: typography.titleSpacing }
-              : null),
-            ...(typeof typography.bodySpacing === "number" && key === "body"
-              ? { letterSpacing: typography.bodySpacing }
-              : null),
-            ...(typeof typography.ctaSpacing === "number" && key === "cta"
-              ? { letterSpacing: typography.ctaSpacing }
-              : null),
-            ...(typeof typography.taglineSpacing === "number" && key === "tagline"
-              ? { letterSpacing: typography.taglineSpacing }
-              : null)
-          };
-        });
-
-        const prevOverrides =
-          slideObj.overrides && typeof slideObj.overrides === "object"
-            ? ({ ...(slideObj.overrides as Record<string, unknown>) } as Record<string, unknown>)
-            : {};
-        const nextOverrides = persistOverride
-          ? { ...prevOverrides, typography }
-          : { ...prevOverrides, typography: null };
-
-        const nextSlide = { ...slideObj, objects: nextObjects, overrides: nextOverrides };
-        prevSlides[idx] = nextSlide;
-        return { ...prev, slides: prevSlides };
-      });
-      setDirty(true);
-      setCanvasRevision((v) => v + 1);
-    },
-    [props.slides]
-  );
-
-  const clearSlideTypographyOverride = React.useCallback(
-    (slideIndex: number) => {
-      applyTypographyToSlide(slideIndex, globalTypography, false);
-    },
-    [applyTypographyToSlide, globalTypography]
   );
 
   const onCanvasSlideChange = React.useCallback(
@@ -2151,6 +1896,46 @@ export default function StudioShell(props: Props) {
       setDirty(true);
     },
     [props.slides, selectedSlideIndex]
+  );
+
+  const reorderSlides = React.useCallback(
+    (from: number, to: number) => {
+      if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+      if (from === to) return;
+
+      setEditorState((prev) => {
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+        if (prevSlides.length <= 1) return prev;
+
+        const safeFrom = clampInt(from, 0, prevSlides.length - 1);
+        const safeTo = clampInt(to, 0, prevSlides.length - 1);
+        if (safeFrom === safeTo) return prev;
+
+        const next = [...prevSlides];
+        const [moved] = next.splice(safeFrom, 1);
+        next.splice(safeTo, 0, moved);
+        return { ...prev, slides: next };
+      });
+
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
+
+      setSelectedSlideIndex((current) => {
+        const cur = current - 1;
+        const safeFrom = clampInt(from, 0, props.slideCount - 1);
+        const safeTo = clampInt(to, 0, props.slideCount - 1);
+        if (cur === safeFrom) return safeTo + 1;
+        if (safeFrom < safeTo) {
+          if (cur > safeFrom && cur <= safeTo) return cur; // (cur-1)+1
+          return current;
+        }
+        if (cur >= safeTo && cur < safeFrom) return cur + 2; // (cur+1)+1
+        return current;
+      });
+    },
+    [props.slideCount, props.slides]
   );
 
   const downloadActiveSlidePng = React.useCallback(() => {
@@ -2711,179 +2496,30 @@ export default function StudioShell(props: Props) {
                           />
                         ) : null}
                       </div>
-                    </section>
+	                    </section>
 
-                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
-                      <div className="text-base font-medium">Paleta (slide)</div>
-                      <div className="text-xs text-muted-foreground">
-                        A paleta global continua sendo a base. Aqui você pode aplicar uma paleta só para este slide.
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {userPaletteOptions.concat(globalPaletteOptions).slice(0, 16).map((p) => (
-                          <div key={p.id} className="w-[72px]">
-                            <PaletteSwatchButton
-                              palette={p.palette}
-                              active={selectedSlideOverrides.paletteId === p.id}
-                              onClick={() => applyPaletteToSlide(selectedSlideIndex, p.palette, p.id)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="w-full rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
-                          onClick={() => clearSlidePaletteOverride(selectedSlideIndex)}
-                        >
-                          Usar paleta global
-                        </button>
-                      </div>
-                    </section>
-
-                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
-                      <div className="flex items-center justify-between">
-                        <div className="text-base font-medium">Tipografia (slide)</div>
-                        <span className="text-xs text-muted-foreground">
-                          {selectedSlideOverrides.typography ? "Override" : "Global"}
-                        </span>
-                      </div>
-
-                      <Switch
-                        label="Personalizar neste slide"
-                        checked={Boolean(selectedSlideOverrides.typography)}
-                        onCheckedChange={(next) => {
-                          if (!next) {
-                            clearSlideTypographyOverride(selectedSlideIndex);
-                            return;
-                          }
-                          applyTypographyToSlide(selectedSlideIndex, globalTypography, true);
-                        }}
-                      />
-
-                      {selectedSlideOverrides.typography ? (
-                        <div className="grid grid-cols-2 gap-3">
-                          <label className="space-y-1">
-                            <div className="text-[11px] text-muted-foreground">Fonte do título</div>
-                            <select
-                              className="h-9 w-full rounded-lg border bg-background px-2 text-sm"
-                              value={slideTypography.titleFontFamily}
-                              onChange={(e) => {
-                                applyTypographyToSlide(
-                                  selectedSlideIndex,
-                                  { ...slideTypography, titleFontFamily: e.target.value },
-                                  true
-                                );
-                              }}
-                            >
-                              {FONT_FAMILIES.map((f) => (
-                                <option key={f.label} value={f.value}>
-                                  {f.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="space-y-1">
-                            <div className="text-[11px] text-muted-foreground">Fonte do corpo</div>
-                            <select
-                              className="h-9 w-full rounded-lg border bg-background px-2 text-sm"
-                              value={slideTypography.bodyFontFamily}
-                              onChange={(e) => {
-                                applyTypographyToSlide(
-                                  selectedSlideIndex,
-                                  { ...slideTypography, bodyFontFamily: e.target.value },
-                                  true
-                                );
-                              }}
-                            >
-                              {FONT_FAMILIES.map((f) => (
-                                <option key={f.label} value={f.value}>
-                                  {f.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                      ) : null}
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="w-full rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
-                          onClick={() => clearSlideTypographyOverride(selectedSlideIndex)}
-                        >
-                          Reaplicar tipografia global
-                        </button>
-                      </div>
-                    </section>
-
-                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
-                      <div className="text-base font-medium">Imagens (slide)</div>
-                      <div className="space-y-2">
-                        {effectiveTemplate.images.map((img) => {
-                          const has = Boolean(
-                            canvasSlide.objects.find((o) => {
-                              if (o.type !== "image") return false;
-                              if (
-                                o.slotId !== img.id &&
-                                o.id !== img.id &&
-                                o.id !== `image_${img.id}`
-                              ) {
-                                return false;
-                              }
-                              return typeof o.assetId === "string" && o.assetId.length > 0;
-                            })
-                          );
-                          return (
-                            <div
-                              key={img.id}
-                              className="flex items-center justify-between gap-3 rounded-xl border bg-background px-3 py-2"
-                            >
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium">
-                                  {img.kind === "background" ? "Fundo" : `Slot: ${img.id}`}
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  {has ? "Preenchido" : "Vazio"}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  className="rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary"
-                                  onClick={() => {
-                                    setSlotPicker({ slideIndex: selectedSlideIndex, slotId: img.id });
-                                    setActiveDock("assets");
-                                    setAssetsTab("generated");
-                                    setLeftOpen(true);
-                                  }}
-                                >
-                                  {has ? "Trocar" : "Adicionar"}
-                                </button>
-                                {has ? (
-                                  <button
-                                    type="button"
-                                    className="rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary"
-                                    onClick={() => removeAssetFromSlot(selectedSlideIndex, img.id)}
-                                  >
-                                    Remover
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </section>
-
-                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
-                      <div className="text-base font-medium">Ordem dos slides</div>
-                      <div className="text-xs text-muted-foreground">
-                        Arraste para reordenar. (MVP)
-                      </div>
-                      <div className="space-y-2">
-                        {slidesFromState.map((s, i) => {
+	                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
+	                      <div className="text-base font-medium">Ordem dos slides</div>
+	                      <div className="text-xs text-muted-foreground">
+	                        Arraste para reordenar. (MVP)
+	                      </div>
+	                      <div className="space-y-2">
+	                        <div
+	                          className="rounded-xl border border-dashed bg-background/40 px-3 py-2 text-xs text-muted-foreground"
+	                          onDragOver={(e) => {
+	                            e.preventDefault();
+	                            e.dataTransfer.dropEffect = "move";
+	                          }}
+	                          onDrop={(e) => {
+	                            e.preventDefault();
+	                            const from = Number(e.dataTransfer.getData("text/plain"));
+	                            if (!Number.isFinite(from)) return;
+	                            reorderSlides(from, 0);
+	                          }}
+	                        >
+	                          Solte aqui para mover ao início
+	                        </div>
+	                        {slidesFromState.map((s, i) => {
                           const slideObj = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
                           const objects = Array.isArray(slideObj.objects)
                             ? (slideObj.objects as unknown[])
@@ -2900,8 +2536,8 @@ export default function StudioShell(props: Props) {
                             titleObj && typeof (titleObj as Record<string, unknown>).text === "string"
                               ? String((titleObj as Record<string, unknown>).text)
                               : "";
-                          return (
-                            <div
+	                          return (
+	                            <div
                               key={typeof slideObj.id === "string" ? (slideObj.id as string) : `idx_${i}`}
                               draggable
                               onDragStart={(e) => {
@@ -2912,38 +2548,12 @@ export default function StudioShell(props: Props) {
                                 e.preventDefault();
                                 e.dataTransfer.dropEffect = "move";
                               }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                const from = Number(e.dataTransfer.getData("text/plain"));
-                                if (!Number.isFinite(from)) return;
-                                const to = i;
-                                if (from === to) return;
-                                setEditorState((prev) => {
-                                  const prevSlides = Array.isArray(prev.slides)
-                                    ? ([...(prev.slides as SlideLike[])] as SlideLike[])
-                                    : [...props.slides];
-                                  if (from < 0 || from >= prevSlides.length) return prev;
-                                  const next = [...prevSlides];
-                                  const [moved] = next.splice(from, 1);
-                                  next.splice(to, 0, moved);
-                                  return { ...prev, slides: next };
-                                });
-                                setDirty(true);
-                                setCanvasRevision((v) => v + 1);
-
-                                setSelectedSlideIndex((current) => {
-                                  const cur = current - 1;
-                                  if (cur === from) return to + 1;
-                                  if (from < to) {
-                                    // slides in (from, to] shift left by 1
-                                    if (cur > from && cur <= to) return cur; // (cur-1)+1
-                                    return current;
-                                  }
-                                  // from > to: slides in [to, from) shift right by 1
-                                  if (cur >= to && cur < from) return cur + 2; // (cur+1)+1
-                                  return current;
-                                });
-                              }}
+	                              onDrop={(e) => {
+	                                e.preventDefault();
+	                                const from = Number(e.dataTransfer.getData("text/plain"));
+	                                if (!Number.isFinite(from)) return;
+	                                reorderSlides(from, i);
+	                              }}
                               className={[
                                 "flex cursor-grab items-center justify-between gap-3 rounded-xl border bg-background px-3 py-2",
                                 i + 1 === selectedSlideIndex ? "ring-2 ring-primary/30" : ""
@@ -2962,10 +2572,25 @@ export default function StudioShell(props: Props) {
                               </button>
                               <span className="text-xs text-muted-foreground">⋮⋮</span>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </section>
+	                          );
+	                        })}
+	                        <div
+	                          className="rounded-xl border border-dashed bg-background/40 px-3 py-2 text-xs text-muted-foreground"
+	                          onDragOver={(e) => {
+	                            e.preventDefault();
+	                            e.dataTransfer.dropEffect = "move";
+	                          }}
+	                          onDrop={(e) => {
+	                            e.preventDefault();
+	                            const from = Number(e.dataTransfer.getData("text/plain"));
+	                            if (!Number.isFinite(from)) return;
+	                            reorderSlides(from, slidesFromState.length - 1);
+	                          }}
+	                        >
+	                          Solte aqui para mover ao fim
+	                        </div>
+	                      </div>
+	                    </section>
                   </div>
                 ) : null}
 
@@ -3051,14 +2676,22 @@ export default function StudioShell(props: Props) {
                           </div>
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
-                            {props.assets.reference.slice(0, 12).map((a) => (
-                              <button
-                                key={a.id}
-                                type="button"
-                                disabled={!a.signedUrl}
-                                onClick={() => {
-                                  if (slotPicker) {
-                                    assignAssetToSlot(a.id);
+	                            {props.assets.reference.slice(0, 12).map((a) => (
+	                              <button
+	                                key={a.id}
+	                                type="button"
+	                                draggable
+	                                onDragStart={(e) => {
+	                                  e.dataTransfer.setData(
+	                                    "application/x-dojogram-asset-id",
+	                                    a.id
+	                                  );
+	                                  e.dataTransfer.effectAllowed = "copy";
+	                                }}
+	                                disabled={!a.signedUrl}
+	                                onClick={() => {
+	                                  if (slotPicker) {
+	                                    assignAssetToSlot(a.id);
                                     return;
                                   }
                                   insertAssetIntoSlide(a.id);
@@ -3090,15 +2723,23 @@ export default function StudioShell(props: Props) {
                           </div>
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
-                            {generatedAssets.slice(0, 12).map((a) => (
-                              <button
-                                key={a.id}
-                                type="button"
-                                disabled={!a.signedUrl}
-                                onClick={() => {
-                                  if (slotPicker) {
-                                    assignAssetToSlot(a.id);
-                                    return;
+	                            {generatedAssets.slice(0, 12).map((a) => (
+	                              <button
+	                                key={a.id}
+	                                type="button"
+	                                draggable
+	                                onDragStart={(e) => {
+	                                  e.dataTransfer.setData(
+	                                    "application/x-dojogram-asset-id",
+	                                    a.id
+	                                  );
+	                                  e.dataTransfer.effectAllowed = "copy";
+	                                }}
+	                                disabled={!a.signedUrl}
+	                                onClick={() => {
+	                                  if (slotPicker) {
+	                                    assignAssetToSlot(a.id);
+	                                    return;
                                   }
                                   insertAssetIntoSlide(a.id);
                                 }}
@@ -4030,19 +3671,32 @@ export default function StudioShell(props: Props) {
                   </div>
                 ))}
                 {/* Image slot placeholders (template-driven) */}
-                {missingImageSlots.map((slot) => (
-                  <button
-                    key={slot.id}
-                    type="button"
-                    className="absolute z-20"
-                    style={rectToPct(slot.bounds)}
-                    onClick={() => {
-                      setSlotPicker({ slideIndex: selectedSlideIndex, slotId: slot.id });
-                      setActiveDock("assets");
-                      setAssetsTab("generated");
-                      setLeftOpen(true);
-                    }}
-                  >
+	                {missingImageSlots.map((slot) => (
+	                  <button
+	                    key={slot.id}
+	                    type="button"
+	                    className="absolute z-20"
+	                    style={rectToPct(slot.bounds)}
+	                    onDragOver={(e) => {
+	                      e.preventDefault();
+	                      e.dataTransfer.dropEffect = "copy";
+	                    }}
+	                    onDrop={(e) => {
+	                      e.preventDefault();
+	                      const dropped = e.dataTransfer.getData("application/x-dojogram-asset-id");
+	                      const assetId = typeof dropped === "string" ? dropped.trim() : "";
+	                      if (assetId) {
+	                        assignAssetToSpecificSlot(selectedSlideIndex, slot.id, assetId);
+	                        return;
+	                      }
+	                    }}
+	                    onClick={() => {
+	                      setSlotPicker({ slideIndex: selectedSlideIndex, slotId: slot.id });
+	                      setActiveDock("assets");
+	                      setAssetsTab("generated");
+	                      setLeftOpen(true);
+	                    }}
+	                  >
                     <div className="flex h-full w-full items-center justify-center rounded-2xl border-2 border-dashed border-emerald-400/70 bg-emerald-50/10 text-[11px] font-medium text-emerald-700">
                       Clique para adicionar imagem
                     </div>

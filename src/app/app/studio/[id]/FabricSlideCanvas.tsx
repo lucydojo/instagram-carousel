@@ -10,6 +10,10 @@ type SlideObjectV1 = {
   type: string;
   variant?: TextVariant;
   hidden?: boolean;
+  contentOffsetX?: number; // px inside slot (cover-fit)
+  contentOffsetY?: number; // px inside slot (cover-fit)
+  cornerRounding?: number; // 0-100 (0 = square, 100 = circle)
+  strokeWeight?: "none" | "thin" | "medium" | "thick";
   x?: number;
   y?: number;
   width?: number;
@@ -93,6 +97,100 @@ function clampNumber(value: unknown, fallback: number) {
   return value;
 }
 
+function clampNumberRange(value: unknown, min: number, max: number, fallback: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function strokeWidthForWeight(weight: SlideObjectV1["strokeWeight"]): number {
+  if (weight === "thin") return 2;
+  if (weight === "medium") return 6;
+  if (weight === "thick") return 12;
+  return 0;
+}
+
+type CoverCropResult = {
+  cropX: number;
+  cropY: number;
+  cropW: number;
+  cropH: number;
+  scale: number;
+  normalizedOffsetX: number;
+  normalizedOffsetY: number;
+};
+
+function clampInt(value: number, min: number, max: number) {
+  const v = Math.trunc(value);
+  if (v < min) return min;
+  if (v > max) return max;
+  return v;
+}
+
+function computeCoverCrop(
+  iw: number,
+  ih: number,
+  frameW: number,
+  frameH: number,
+  offsetX: number,
+  offsetY: number
+): CoverCropResult {
+  const safeIw = Math.max(1, Math.round(iw));
+  const safeIh = Math.max(1, Math.round(ih));
+  const safeW = Math.max(1, Math.round(frameW));
+  const safeH = Math.max(1, Math.round(frameH));
+
+  const slotAspect = safeW / safeH;
+  const imgAspect = safeIw / safeIh;
+
+  if (imgAspect > slotAspect) {
+    const cropH = safeIh;
+    const cropW = clampInt(safeIh * slotAspect, 1, safeIw);
+    const baseX = Math.round((safeIw - cropW) / 2);
+    const maxX = Math.max(0, safeIw - cropW);
+    const candidate = baseX + Math.round(offsetX);
+    const cropX = clampInt(candidate, 0, maxX);
+    return {
+      cropX,
+      cropY: 0,
+      cropW,
+      cropH,
+      scale: safeW / Math.max(1, cropW),
+      normalizedOffsetX: cropX - baseX,
+      normalizedOffsetY: 0
+    };
+  }
+
+  if (imgAspect < slotAspect) {
+    const cropW = safeIw;
+    const cropH = clampInt(safeIw / slotAspect, 1, safeIh);
+    const baseY = Math.round((safeIh - cropH) / 2);
+    const maxY = Math.max(0, safeIh - cropH);
+    const candidate = baseY + Math.round(offsetY);
+    const cropY = clampInt(candidate, 0, maxY);
+    return {
+      cropX: 0,
+      cropY,
+      cropW,
+      cropH,
+      scale: safeH / Math.max(1, cropH),
+      normalizedOffsetX: 0,
+      normalizedOffsetY: cropY - baseY
+    };
+  }
+
+  return {
+    cropX: 0,
+    cropY: 0,
+    cropW: safeIw,
+    cropH: safeIh,
+    scale: safeW / Math.max(1, safeIw),
+    normalizedOffsetX: 0,
+    normalizedOffsetY: 0
+  };
+}
+
 function toFabricCharSpacing(letterSpacingPx: number | undefined, fontSize: number) {
   if (typeof letterSpacingPx !== "number" || !Number.isFinite(letterSpacingPx)) return 0;
   if (!Number.isFinite(fontSize) || fontSize <= 0) return 0;
@@ -124,6 +222,36 @@ function getObjectVariant(obj: FabricObject): TextVariant | null {
 
 function setObjectVariant(obj: FabricObject, variant: TextVariant) {
   (obj as unknown as { dojogramVariant?: TextVariant }).dojogramVariant = variant;
+}
+
+type ImageMeta = { naturalWidth: number; naturalHeight: number };
+
+function getImageMeta(obj: FabricObject): ImageMeta | null {
+  const anyObj = obj as unknown as { dojogramImageMeta?: unknown };
+  const meta = anyObj.dojogramImageMeta as ImageMeta | undefined;
+  if (!meta || typeof meta !== "object") return null;
+  if (
+    typeof meta.naturalWidth !== "number" ||
+    !Number.isFinite(meta.naturalWidth) ||
+    typeof meta.naturalHeight !== "number" ||
+    !Number.isFinite(meta.naturalHeight)
+  ) {
+    return null;
+  }
+  return meta;
+}
+
+function setImageMeta(obj: FabricObject, meta: ImageMeta) {
+  (obj as unknown as { dojogramImageMeta?: ImageMeta }).dojogramImageMeta = meta;
+}
+
+function getObjectKind(obj: FabricObject): string | null {
+  const anyObj = obj as unknown as { dojogramKind?: unknown };
+  return typeof anyObj.dojogramKind === "string" ? anyObj.dojogramKind : null;
+}
+
+function setObjectKind(obj: FabricObject, kind: string) {
+  (obj as unknown as { dojogramKind?: string }).dojogramKind = kind;
 }
 
 function toFontStack(fontFamily: string | undefined) {
@@ -214,6 +342,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   const clipboardRef = React.useRef<{ objects: SlideObjectV1[]; pasteN: number } | null>(
     null
   );
+  const accentColor = styleDefaults?.palette?.accent ?? "#111827";
   const onSelectionChangeRef = React.useRef<Props["onSelectionChange"]>(null);
   const [textToolbar, setTextToolbar] = React.useState<{
     left: number;
@@ -229,9 +358,32 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     linethrough: boolean;
     textAlign: "left" | "center" | "right" | "justify";
   } | null>(null);
+  const [imageToolbar, setImageToolbar] = React.useState<{
+    left: number;
+    top: number;
+    id: string;
+    cornerRounding: number;
+    strokeWeight: NonNullable<SlideObjectV1["strokeWeight"]>;
+    cropMode: boolean;
+  } | null>(null);
   const toolbarRafRef = React.useRef<number | null>(null);
   const [fontSizeDraft, setFontSizeDraft] = React.useState<string>("");
   const [fontSizeFocused, setFontSizeFocused] = React.useState(false);
+  const [cornerRoundingDraft, setCornerRoundingDraft] = React.useState<string>("");
+  const [cornerRoundingFocused, setCornerRoundingFocused] = React.useState(false);
+  const [cropModeId, setCropModeId] = React.useState<string | null>(null);
+  const cropModeRef = React.useRef<string | null>(null);
+  const cropDragRef = React.useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+  } | null>(null);
+
+  React.useEffect(() => {
+    cropModeRef.current = cropModeId;
+  }, [cropModeId]);
 
   React.useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange ?? null;
@@ -383,15 +535,228 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     if (!fontSizeFocused) {
       setFontSizeDraft(String(Math.round(typeof any.fontSize === "number" ? any.fontSize : 34)));
     }
-  }, []);
+  }, [fontSizeFocused]);
+
+  const updateImageToolbar = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    const active = canvas.getActiveObject() as FabricObject | null;
+    if (!active || getObjectKind(active) !== "image") {
+      setImageToolbar(null);
+      return;
+    }
+
+    const id = getObjectId(active);
+    if (!id) {
+      setImageToolbar(null);
+      return;
+    }
+
+    const raw = slideRef.current.objects.find((o) => o?.id === id);
+    if (!raw || raw.type !== "image") {
+      setImageToolbar(null);
+      return;
+    }
+
+    type CoordPoint = { x: number; y: number };
+    type OCoords = { tl: CoordPoint; tr: CoordPoint; br: CoordPoint; bl: CoordPoint };
+    const coords = (active as unknown as { oCoords?: OCoords }).oCoords;
+    if (!coords || !coords.tl) {
+      setImageToolbar(null);
+      return;
+    }
+
+    const xs = [coords.tl.x, coords.tr.x, coords.br.x, coords.bl.x].filter(
+      (v: unknown) => typeof v === "number" && Number.isFinite(v)
+    ) as number[];
+    const ys = [coords.tl.y, coords.tr.y, coords.br.y, coords.bl.y].filter(
+      (v: unknown) => typeof v === "number" && Number.isFinite(v)
+    ) as number[];
+    if (xs.length === 0 || ys.length === 0) {
+      setImageToolbar(null);
+      return;
+    }
+
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+
+    const upper = canvas.upperCanvasEl;
+    const upperBox = upper.getBoundingClientRect();
+    const ratio = upperBox.width > 0 ? upper.width / upperBox.width : 1;
+    const cssX = minX / ratio;
+    const cssY = minY / ratio;
+
+    const box = container.getBoundingClientRect();
+    const maxLeft = Math.max(8, box.width - 380);
+    const left = Math.max(8, Math.min(maxLeft, cssX));
+    const top = Math.max(8, cssY - 54);
+
+    const cornerRounding = clampNumberRange(raw.cornerRounding, 0, 100, 18);
+    const strokeWeight =
+      raw.strokeWeight === "thin" || raw.strokeWeight === "medium" || raw.strokeWeight === "thick"
+        ? raw.strokeWeight
+        : "none";
+
+    setImageToolbar({
+      id,
+      left,
+      top,
+      cornerRounding,
+      strokeWeight,
+      cropMode: cropModeRef.current === id
+    });
+
+    if (!cornerRoundingFocused) {
+      setCornerRoundingDraft(String(Math.round(cornerRounding)));
+    }
+  }, [cornerRoundingFocused]);
 
   const scheduleToolbarUpdate = React.useCallback(() => {
     if (toolbarRafRef.current) cancelAnimationFrame(toolbarRafRef.current);
     toolbarRafRef.current = requestAnimationFrame(() => {
       toolbarRafRef.current = null;
       updateTextToolbar();
+      updateImageToolbar();
     });
-  }, [updateTextToolbar]);
+  }, [updateImageToolbar, updateTextToolbar]);
+
+  const getActiveImageGroup = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return null;
+    const active = canvas.getActiveObject() as FabricObject | null;
+    if (!active || getObjectKind(active) !== "image") return null;
+    return active as unknown as Group;
+  }, []);
+
+  const syncImageGroupAppearance = React.useCallback(
+    (group: Group, raw: SlideObjectV1, meta: ImageMeta) => {
+      const iw = clampNumber(meta.naturalWidth, 1);
+      const ih = clampNumber(meta.naturalHeight, 1);
+      const frameW = clampNumber(raw.width, 400);
+      const frameH = clampNumber(raw.height, frameW);
+
+      const offsetX = clampNumber(raw.contentOffsetX, 0);
+      const offsetY = clampNumber(raw.contentOffsetY, 0);
+      const crop = computeCoverCrop(iw, ih, frameW, frameH, offsetX, offsetY);
+
+      const cornerValue = clampNumberRange(raw.cornerRounding, 0, 100, 18);
+      const radiusPx = (Math.min(frameW, frameH) / 2) * (cornerValue / 100);
+
+      const strokeWeight =
+        raw.strokeWeight === "thin" || raw.strokeWeight === "medium" || raw.strokeWeight === "thick"
+          ? raw.strokeWeight
+          : "none";
+      const strokeWidth = strokeWidthForWeight(strokeWeight);
+      const strokeColor = accentColor;
+
+      const objects = group.getObjects() as unknown as FabricObject[];
+      const imgObj = objects.find((o) => (o as unknown as { type?: unknown }).type === "image") as
+        | Image
+        | undefined;
+      if (imgObj) {
+        imgObj.set({
+          left: 0,
+          top: 0,
+          cropX: crop.cropX,
+          cropY: crop.cropY,
+          width: crop.cropW,
+          height: crop.cropH,
+          scaleX: crop.scale,
+          scaleY: crop.scale,
+          selectable: false,
+          evented: false
+        });
+      }
+
+      const strokeRect = objects.find(
+        (o) => (o as unknown as { dojogramRole?: unknown }).dojogramRole === "stroke"
+      ) as Rect | undefined;
+      if (strokeRect) {
+        const inset = strokeWidth > 0 ? strokeWidth / 2 : 0;
+        strokeRect.set({
+          left: inset,
+          top: inset,
+          width: Math.max(1, frameW - inset * 2),
+          height: Math.max(1, frameH - inset * 2),
+          rx: Math.max(0, radiusPx - inset),
+          ry: Math.max(0, radiusPx - inset),
+          stroke: strokeColor,
+          strokeWidth,
+          opacity: strokeWidth > 0 ? 1 : 0,
+          fill: "rgba(0,0,0,0)",
+          selectable: false,
+          evented: false,
+          strokeUniform: true
+        });
+      }
+
+      const clip = group.clipPath as Rect | undefined;
+      if (clip) {
+        clip.set({
+          left: 0,
+          top: 0,
+          width: frameW,
+          height: frameH,
+          rx: radiusPx,
+          ry: radiusPx
+        });
+      }
+
+      group.setCoords();
+      group.canvas?.requestRenderAll();
+      return { normalizedOffsetX: crop.normalizedOffsetX, normalizedOffsetY: crop.normalizedOffsetY };
+    },
+    [accentColor]
+  );
+
+  const patchActiveImage = React.useCallback(
+    (patch: Partial<SlideObjectV1>) => {
+      const canvas = fabricRef.current;
+      if (!canvas) return false;
+      const group = getActiveImageGroup();
+      if (!group) return false;
+      const id = getObjectId(group as unknown as FabricObject);
+      if (!id) return false;
+
+      const currentSlide = slideRef.current;
+      const rawObj = currentSlide.objects.find((o) => o?.id === id);
+      if (!rawObj || rawObj.type !== "image") return false;
+
+      const meta = getImageMeta(group as unknown as FabricObject);
+      if (!meta) return false;
+
+      const nextRaw: SlideObjectV1 = {
+        ...rawObj,
+        ...patch,
+        cornerRounding:
+          typeof patch.cornerRounding === "number"
+            ? clampNumberRange(patch.cornerRounding, 0, 100, 18)
+            : rawObj.cornerRounding,
+        strokeWeight:
+          patch.strokeWeight === "thin" || patch.strokeWeight === "medium" || patch.strokeWeight === "thick"
+            ? patch.strokeWeight
+            : patch.strokeWeight === "none"
+              ? "none"
+              : rawObj.strokeWeight
+      };
+
+      const normalized = syncImageGroupAppearance(group, nextRaw, meta);
+      const nextObjects = currentSlide.objects.map((o) => {
+        if (!o || o.id !== id) return o;
+        return {
+          ...nextRaw,
+          contentOffsetX: normalized.normalizedOffsetX,
+          contentOffsetY: normalized.normalizedOffsetY
+        };
+      });
+      emit({ ...currentSlide, objects: nextObjects });
+      scheduleToolbarUpdate();
+      return true;
+    },
+    [emit, getActiveImageGroup, scheduleToolbarUpdate, syncImageGroupAppearance]
+  );
 
   const patchActiveText = React.useCallback(
     (patch: Partial<SlideObjectV1>) => {
@@ -735,6 +1100,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const cb = onSelectionChangeRef.current;
       const ids = getActiveIds(canvas);
       cb?.(ids);
+      const cropId = cropModeRef.current;
+      if (cropId && !ids.includes(cropId)) setCropModeId(null);
       scheduleToolbarUpdate();
     };
 
@@ -808,36 +1175,50 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       const rawObj = currentSlide.objects.find((o) => o?.id === id);
       if (rawObj?.type === "image") {
-        // Important: don't destructure Fabric methods like getScaledWidth/getScaledHeight.
-        // They depend on `this` and will throw if called unbound.
-        const getScaledWidth = (target as unknown as { getScaledWidth?: () => number })
-          .getScaledWidth;
-        const getScaledHeight = (target as unknown as { getScaledHeight?: () => number })
-          .getScaledHeight;
-        const scaledWidth =
-          typeof getScaledWidth === "function"
-            ? clampNumber(getScaledWidth.call(target as unknown as object), 1)
-            : typeof target.width === "number"
-              ? Math.max(1, Math.round(target.width * scaleX))
-              : 1;
-        const scaledHeight =
-          typeof getScaledHeight === "function"
-            ? clampNumber(getScaledHeight.call(target as unknown as object), 1)
-            : typeof target.height === "number"
-              ? Math.max(1, Math.round(target.height * scaleY))
-              : 1;
+        const group = target as unknown as Group;
+        const meta = getImageMeta(target);
+
+        const baseW =
+          typeof target.width === "number" && Number.isFinite(target.width)
+            ? target.width
+            : clampNumber(rawObj.width, 1);
+        const baseH =
+          typeof target.height === "number" && Number.isFinite(target.height)
+            ? target.height
+            : clampNumber(rawObj.height, 1);
+
+        const scaledWidth = Math.max(1, Math.round(baseW * scaleX));
+        const scaledHeight = Math.max(1, Math.round(baseH * scaleY));
+
+        const nextRaw: SlideObjectV1 = {
+          ...rawObj,
+          x: Math.round(left),
+          y: Math.round(top),
+          width: scaledWidth,
+          height: scaledHeight
+        };
+
+        // Normalize Fabric scaling back into explicit width/height.
+        group.set({ scaleX: 1, scaleY: 1 });
+
+        let normalizedOffsetX = clampNumber(rawObj.contentOffsetX, 0);
+        let normalizedOffsetY = clampNumber(rawObj.contentOffsetY, 0);
+        if (meta) {
+          const normalized = syncImageGroupAppearance(group, nextRaw, meta);
+          normalizedOffsetX = normalized.normalizedOffsetX;
+          normalizedOffsetY = normalized.normalizedOffsetY;
+        }
 
         const nextObjects = currentSlide.objects.map((o) => {
           if (!o || o.id !== id) return o;
           return {
-            ...o,
-            x: Math.round(left),
-            y: Math.round(top),
-            width: Math.round(scaledWidth),
-            height: Math.round(scaledHeight)
+            ...nextRaw,
+            contentOffsetX: normalizedOffsetX,
+            contentOffsetY: normalizedOffsetY
           };
         });
         emit({ ...currentSlide, objects: nextObjects });
+        scheduleToolbarUpdate();
         return;
       }
 
@@ -963,12 +1344,122 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
     const onTextChanged = (e: { target?: FabricObject }) => onModified(e);
 
+    const onMouseDown = (opt: unknown) => {
+      const cropId = cropModeRef.current;
+      if (!cropId) return;
+      if (isAnyEditing(canvas)) return;
+
+      const evt = (opt as { e?: unknown } | null)?.e;
+      const active = canvas.getActiveObject() as FabricObject | null;
+      if (!active) return;
+      const id = getObjectId(active);
+      if (!id || id !== cropId) return;
+      if (getObjectKind(active) !== "image") return;
+
+      const raw = slideRef.current.objects.find((o) => o?.id === cropId);
+      if (!raw || raw.type !== "image") return;
+
+      const pointer = (canvas as unknown as { getPointer?: (e: unknown) => { x: number; y: number } })
+        .getPointer?.call(canvas, evt) ?? { x: 0, y: 0 };
+      cropDragRef.current = {
+        id: cropId,
+        startX: pointer.x,
+        startY: pointer.y,
+        startOffsetX: clampNumber(raw.contentOffsetX, 0),
+        startOffsetY: clampNumber(raw.contentOffsetY, 0)
+      };
+      canvas.requestRenderAll();
+    };
+
+    const onMouseMove = (opt: unknown) => {
+      const drag = cropDragRef.current;
+      if (!drag) return;
+      if (cropModeRef.current !== drag.id) {
+        cropDragRef.current = null;
+        return;
+      }
+      if (isAnyEditing(canvas)) return;
+
+      const evt = (opt as { e?: unknown } | null)?.e;
+      const active = canvas.getActiveObject() as FabricObject | null;
+      if (!active) return;
+      const id = getObjectId(active);
+      if (!id || id !== drag.id) return;
+      if (getObjectKind(active) !== "image") return;
+
+      const raw = slideRef.current.objects.find((o) => o?.id === drag.id);
+      if (!raw || raw.type !== "image") return;
+
+      const meta = getImageMeta(active);
+      if (!meta) return;
+
+      const frameW = clampNumber(raw.width, 400);
+      const frameH = clampNumber(raw.height, frameW);
+      const baseline = computeCoverCrop(
+        meta.naturalWidth,
+        meta.naturalHeight,
+        frameW,
+        frameH,
+        drag.startOffsetX,
+        drag.startOffsetY
+      );
+
+      const pointer = (canvas as unknown as { getPointer?: (e: unknown) => { x: number; y: number } })
+        .getPointer?.call(canvas, evt) ?? { x: 0, y: 0 };
+      const dx = pointer.x - drag.startX;
+      const dy = pointer.y - drag.startY;
+      const nextOffsetX = drag.startOffsetX - dx / Math.max(0.001, baseline.scale);
+      const nextOffsetY = drag.startOffsetY - dy / Math.max(0.001, baseline.scale);
+
+      const nextRaw: SlideObjectV1 = {
+        ...raw,
+        contentOffsetX: nextOffsetX,
+        contentOffsetY: nextOffsetY
+      };
+
+      const normalized = syncImageGroupAppearance(active as unknown as Group, nextRaw, meta);
+      const currentSlide = slideRef.current;
+      const nextObjects = currentSlide.objects.map((o) => {
+        if (!o || o.id !== drag.id) return o;
+        return {
+          ...o,
+          contentOffsetX: normalized.normalizedOffsetX,
+          contentOffsetY: normalized.normalizedOffsetY
+        };
+      });
+      emit({ ...currentSlide, objects: nextObjects });
+      scheduleToolbarUpdate();
+    };
+
+    const onMouseUp = () => {
+      cropDragRef.current = null;
+    };
+
+    const onDoubleClick = (ev: MouseEvent) => {
+      if (isAnyEditing(canvas)) return;
+      const findTarget = (canvas as unknown as { findTarget?: (e: MouseEvent) => FabricObject | null })
+        .findTarget;
+      const target = typeof findTarget === "function" ? findTarget.call(canvas, ev) : null;
+      if (!target) return;
+      const id = getObjectId(target);
+      if (!id) return;
+      const raw = slideRef.current.objects.find((o) => o?.id === id);
+      if (!raw || raw.type !== "image") return;
+
+      setCropModeId((prev) => (prev === id ? null : id));
+      canvas.setActiveObject(target);
+      scheduleToolbarUpdate();
+      canvas.requestRenderAll();
+    };
+
     canvas.on("selection:created", emitSelection);
     canvas.on("selection:updated", emitSelection);
     canvas.on("selection:cleared", () => {
       const cb = onSelectionChangeRef.current;
       cb?.([]);
       setTextToolbar(null);
+      setImageToolbar(null);
+      setCropModeId(null);
     });
     canvas.on("object:moving", scheduleToolbarUpdate);
     canvas.on("object:scaling", scheduleToolbarUpdate);
@@ -977,6 +1468,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     canvas.on("text:changed", onTextChanged);
     canvas.on("text:editing:entered", onEditingEntered);
     canvas.on("text:editing:exited", onEditingExited);
+    canvas.on("mouse:down", onMouseDown);
+    canvas.on("mouse:move", onMouseMove);
+    canvas.on("mouse:up", onMouseUp);
+    canvas.upperCanvasEl.addEventListener("dblclick", onDoubleClick);
 
     return () => {
       canvas.off("selection:created", emitSelection);
@@ -989,11 +1484,15 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       canvas.off("text:changed", onTextChanged);
       canvas.off("text:editing:entered", onEditingEntered);
       canvas.off("text:editing:exited", onEditingExited);
+      canvas.off("mouse:down", onMouseDown);
+      canvas.off("mouse:move", onMouseMove);
+      canvas.off("mouse:up", onMouseUp);
+      canvas.upperCanvasEl.removeEventListener("dblclick", onDoubleClick);
       canvas.dispose();
       fabricRef.current = null;
     };
     // We intentionally don't depend on `slide` here; events use `slideRef`.
-  }, [scheduleToolbarUpdate]);
+  }, [scheduleToolbarUpdate, syncImageGroupAppearance, emit]);
 
   const fitCanvas = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -1042,7 +1541,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         const slideW = clampNumber(slide.width, 1080);
         const slideH = clampNumber(slide.height, 1080);
 
-      // 1) Images (behind text)
+        // 1) Images (behind text)
       for (const [idx, raw] of (slide.objects ?? []).entries()) {
         if (!raw || typeof raw !== "object") continue;
         if (raw.type !== "image") continue;
@@ -1068,44 +1567,24 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
               const iw = clampNumber(el.naturalWidth, 1);
               const ih = clampNumber(el.naturalHeight, 1);
-              const slotAspect = width / Math.max(1, height);
-              const imgAspect = iw / Math.max(1, ih);
-
-              let cropW = iw;
-              let cropH = ih;
-              let cropX = 0;
-              let cropY = 0;
-              if (imgAspect > slotAspect) {
-                // Wider than slot: crop horizontally.
-                cropW = Math.round(ih * slotAspect);
-                cropH = ih;
-                cropX = Math.round((iw - cropW) / 2);
-                cropY = 0;
-              } else if (imgAspect < slotAspect) {
-                // Taller than slot: crop vertically.
-                cropW = iw;
-                cropH = Math.round(iw / slotAspect);
-                cropX = 0;
-                cropY = Math.round((ih - cropH) / 2);
-              }
-
-              const scale = width / Math.max(1, cropW);
+              const meta: ImageMeta = { naturalWidth: iw, naturalHeight: ih };
 
               const img = new Image(el);
-              img.set({
+              img.set({ left: 0, top: 0, selectable: false, evented: false });
+
+              const strokeRect = new Rect({
                 left: 0,
                 top: 0,
-                cropX,
-                cropY,
-                width: cropW,
-                height: cropH,
-                scaleX: scale,
-                scaleY: scale,
+                width,
+                height,
+                fill: "rgba(0,0,0,0)",
+                opacity: 0,
                 selectable: false,
                 evented: false
               });
+              (strokeRect as unknown as { dojogramRole?: string }).dojogramRole = "stroke";
 
-              const frame = new Group([img], {
+              const frame = new Group([img, strokeRect], {
                 left: x,
                 top: y,
                 originX: "left",
@@ -1117,17 +1596,25 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                 borderColor: "#7c3aed",
                 cornerStyle: "circle",
                 cornerColor: "#7c3aed",
-                transparentCorners: false
+                transparentCorners: false,
+                lockRotation: true
               });
+              (frame as unknown as { hasRotatingPoint?: boolean }).hasRotatingPoint = false;
               setObjectId(frame as unknown as FabricObject, id);
+              setObjectKind(frame as unknown as FabricObject, "image");
+              setImageMeta(frame as unknown as FabricObject, meta);
+
               frame.clipPath = new Rect({
                 left: 0,
                 top: 0,
                 width,
                 height,
-                rx: 18,
-                ry: 18
+                rx: 0,
+                ry: 0
               });
+
+              // Apply initial crop + rounding/stroke from SlideObject.
+              syncImageGroupAppearance(frame, { ...raw, width, height }, meta);
 
               canvas.add(frame);
               canvas.sendObjectToBack(frame);
@@ -1240,6 +1727,24 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     obs.observe(container);
     return () => obs.disconnect();
   }, [fitCanvas]);
+
+  React.useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const cropId = cropModeId;
+    for (const obj of canvas.getObjects() as unknown as FabricObject[]) {
+      if (getObjectKind(obj) !== "image") continue;
+      const id = getObjectId(obj);
+      if (!id) continue;
+      const isCrop = Boolean(cropId && cropId === id);
+      (obj as unknown as { lockMovementX?: boolean }).lockMovementX = isCrop;
+      (obj as unknown as { lockMovementY?: boolean }).lockMovementY = isCrop;
+      (obj as unknown as { hasControls?: boolean }).hasControls = !isCrop;
+      (obj as unknown as { hoverCursor?: string }).hoverCursor = isCrop ? "grab" : "move";
+    }
+    scheduleToolbarUpdate();
+    canvas.requestRenderAll();
+  }, [cropModeId, scheduleToolbarUpdate]);
 
   return (
     <div
@@ -1448,6 +1953,117 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             ⟹
           </button>
+        </div>
+      ) : null}
+
+      {imageToolbar ? (
+        <div
+          className="absolute z-40 flex items-center gap-2 rounded-2xl border bg-background/90 px-2 py-1 shadow-sm backdrop-blur"
+          style={{ left: imageToolbar.left, top: imageToolbar.top }}
+        >
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">Borda</span>
+            <button
+              type="button"
+              onClick={() => patchActiveImage({ strokeWeight: "none" })}
+              className={[
+                "rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary",
+                imageToolbar.strokeWeight === "none" ? "border-primary" : ""
+              ].join(" ")}
+              title="Sem borda"
+            >
+              Ø
+            </button>
+            <button
+              type="button"
+              onClick={() => patchActiveImage({ strokeWeight: "thin" })}
+              className={[
+                "rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary",
+                imageToolbar.strokeWeight === "thin" ? "border-primary" : ""
+              ].join(" ")}
+              title="Fino"
+            >
+              F
+            </button>
+            <button
+              type="button"
+              onClick={() => patchActiveImage({ strokeWeight: "medium" })}
+              className={[
+                "rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary",
+                imageToolbar.strokeWeight === "medium" ? "border-primary" : ""
+              ].join(" ")}
+              title="Médio"
+            >
+              M
+            </button>
+            <button
+              type="button"
+              onClick={() => patchActiveImage({ strokeWeight: "thick" })}
+              className={[
+                "rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary",
+                imageToolbar.strokeWeight === "thick" ? "border-primary" : ""
+              ].join(" ")}
+              title="Grosso"
+            >
+              G
+            </button>
+          </div>
+
+          <div className="mx-1 h-6 w-px bg-border" />
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Cantos</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.max(0, Math.min(100, Number(cornerRoundingDraft || imageToolbar.cornerRounding)))}
+              onChange={(e) => {
+                const v = Math.max(0, Math.min(100, Math.trunc(Number(e.target.value))));
+                setCornerRoundingDraft(String(v));
+                patchActiveImage({ cornerRounding: v });
+              }}
+              className="w-[96px]"
+              title="Arredondamento"
+            />
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              inputMode="numeric"
+              value={cornerRoundingDraft}
+              onFocus={() => setCornerRoundingFocused(true)}
+              onBlur={() => {
+                setCornerRoundingFocused(false);
+                const n = Number(cornerRoundingDraft);
+                if (!Number.isFinite(n)) {
+                  setCornerRoundingDraft(String(Math.round(imageToolbar.cornerRounding)));
+                  return;
+                }
+                const clamped = Math.max(0, Math.min(100, Math.trunc(n)));
+                setCornerRoundingDraft(String(clamped));
+                patchActiveImage({ cornerRounding: clamped });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.currentTarget as HTMLInputElement).blur();
+                  return;
+                }
+                if (e.key === "e" || e.key === "E" || e.key === "+" || e.key === "-" || e.key === ".") {
+                  e.preventDefault();
+                }
+              }}
+              onChange={(e) => setCornerRoundingDraft(e.target.value.replace(/[^0-9]/g, ""))}
+              className="w-[64px] rounded-lg border bg-background px-2 py-1 text-xs"
+              title="Arredondamento (0-100)"
+            />
+          </div>
+
+          {imageToolbar.cropMode ? (
+            <span className="ml-1 text-xs text-muted-foreground">Reenquadrar: arraste</span>
+          ) : null}
         </div>
       ) : null}
     </div>
