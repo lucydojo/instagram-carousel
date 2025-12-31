@@ -394,6 +394,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   }, [onSlideChange]);
 
   const emit = React.useCallback((next: SlideV1) => {
+    // Keep the ref in sync immediately so Fabric event handlers that depend
+    // on `slideRef.current` don't "revert" changes between rapid interactions
+    // (e.g. resize → move before the debounced onSlideChange runs).
+    slideRef.current = next;
     nextSlideRef.current = next;
     if (emitTimerRef.current) window.clearTimeout(emitTimerRef.current);
     emitTimerRef.current = window.setTimeout(() => {
@@ -652,7 +656,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const strokeColor = accentColor;
 
       const objects = group.getObjects() as unknown as FabricObject[];
-      const imgObj = objects.find((o) => (o as unknown as { type?: unknown }).type === "image") as
+      const innerGroup = objects.find(
+        (o) => (o as unknown as { dojogramRole?: unknown }).dojogramRole === "imageInner"
+      ) as Group | undefined;
+      const innerObjects = innerGroup ? ((innerGroup.getObjects() as unknown) as FabricObject[]) : [];
+      const imgObj = innerObjects.find((o) => (o as unknown as { type?: unknown }).type === "image") as
         | Image
         | undefined;
       if (imgObj) {
@@ -670,18 +678,35 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         });
       }
 
+      if (innerGroup) {
+        const clip = innerGroup.clipPath as Rect | undefined;
+        if (clip) {
+          clip.set({
+            left: 0,
+            top: 0,
+            width: frameW,
+            height: frameH,
+            rx: radiusPx,
+            ry: radiusPx
+          });
+        }
+
+        // Recompute bounds for accurate selection outlines after updates.
+        (innerGroup as unknown as { _calcBounds?: () => void })._calcBounds?.();
+        (innerGroup as unknown as { _updateObjectsCoords?: () => void })._updateObjectsCoords?.();
+      }
+
       const strokeRect = objects.find(
         (o) => (o as unknown as { dojogramRole?: unknown }).dojogramRole === "stroke"
       ) as Rect | undefined;
       if (strokeRect) {
-        const inset = strokeWidth > 0 ? strokeWidth / 2 : 0;
         strokeRect.set({
-          left: inset,
-          top: inset,
-          width: Math.max(1, frameW - inset * 2),
-          height: Math.max(1, frameH - inset * 2),
-          rx: Math.max(0, radiusPx - inset),
-          ry: Math.max(0, radiusPx - inset),
+          left: 0,
+          top: 0,
+          width: Math.max(1, frameW),
+          height: Math.max(1, frameH),
+          rx: Math.max(0, radiusPx),
+          ry: Math.max(0, radiusPx),
           stroke: strokeColor,
           strokeWidth,
           opacity: strokeWidth > 0 ? 1 : 0,
@@ -692,18 +717,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         });
       }
 
-      const clip = group.clipPath as Rect | undefined;
-      if (clip) {
-        clip.set({
-          left: 0,
-          top: 0,
-          width: frameW,
-          height: frameH,
-          rx: radiusPx,
-          ry: radiusPx
-        });
-      }
-
+      // Recompute bounds for accurate selection outlines after updates.
+      (group as unknown as { _calcBounds?: () => void })._calcBounds?.();
+      (group as unknown as { _updateObjectsCoords?: () => void })._updateObjectsCoords?.();
       group.setCoords();
       group.canvas?.requestRenderAll();
       return { normalizedOffsetX: crop.normalizedOffsetX, normalizedOffsetY: crop.normalizedOffsetY };
@@ -1179,13 +1195,17 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         const meta = getImageMeta(target);
 
         const baseW =
-          typeof target.width === "number" && Number.isFinite(target.width)
-            ? target.width
-            : clampNumber(rawObj.width, 1);
+          typeof rawObj.width === "number" && Number.isFinite(rawObj.width)
+            ? rawObj.width
+            : typeof target.width === "number" && Number.isFinite(target.width)
+              ? target.width
+              : 1;
         const baseH =
-          typeof target.height === "number" && Number.isFinite(target.height)
-            ? target.height
-            : clampNumber(rawObj.height, 1);
+          typeof rawObj.height === "number" && Number.isFinite(rawObj.height)
+            ? rawObj.height
+            : typeof target.height === "number" && Number.isFinite(target.height)
+              ? target.height
+              : 1;
 
         const scaledWidth = Math.max(1, Math.round(baseW * scaleX));
         const scaledHeight = Math.max(1, Math.round(baseH * scaleY));
@@ -1572,6 +1592,26 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               const img = new Image(el);
               img.set({ left: 0, top: 0, selectable: false, evented: false });
 
+              const innerClip = new Rect({
+                left: 0,
+                top: 0,
+                width,
+                height,
+                rx: 0,
+                ry: 0
+              });
+
+              const inner = new Group([img], {
+                left: 0,
+                top: 0,
+                originX: "left",
+                originY: "top",
+                selectable: false,
+                evented: false
+              });
+              (inner as unknown as { dojogramRole?: string }).dojogramRole = "imageInner";
+              inner.clipPath = innerClip;
+
               const strokeRect = new Rect({
                 left: 0,
                 top: 0,
@@ -1580,11 +1620,12 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                 fill: "rgba(0,0,0,0)",
                 opacity: 0,
                 selectable: false,
-                evented: false
+                evented: false,
+                strokeUniform: true
               });
               (strokeRect as unknown as { dojogramRole?: string }).dojogramRole = "stroke";
 
-              const frame = new Group([img, strokeRect], {
+              const frame = new Group([inner, strokeRect], {
                 left: x,
                 top: y,
                 originX: "left",
@@ -1603,15 +1644,6 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               setObjectId(frame as unknown as FabricObject, id);
               setObjectKind(frame as unknown as FabricObject, "image");
               setImageMeta(frame as unknown as FabricObject, meta);
-
-              frame.clipPath = new Rect({
-                left: 0,
-                top: 0,
-                width,
-                height,
-                rx: 0,
-                ry: 0
-              });
 
               // Apply initial crop + rounding/stroke from SlideObject.
               syncImageGroupAppearance(frame, { ...raw, width, height }, meta);
@@ -2018,7 +2050,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               min={0}
               max={100}
               step={1}
-              value={Math.max(0, Math.min(100, Number(cornerRoundingDraft || imageToolbar.cornerRounding)))}
+              value={Math.max(
+                0,
+                Math.min(
+                  100,
+                  Number(cornerRoundingDraft === "" ? imageToolbar.cornerRounding : cornerRoundingDraft)
+                )
+              )}
               onChange={(e) => {
                 const v = Math.max(0, Math.min(100, Math.trunc(Number(e.target.value))));
                 setCornerRoundingDraft(String(v));
