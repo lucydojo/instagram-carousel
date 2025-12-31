@@ -14,6 +14,7 @@ type SlideObjectV1 = {
   contentOffsetY?: number; // px inside slot (cover-fit)
   cornerRounding?: number; // 0-100 (0 = square, 100 = circle)
   strokeWeight?: "none" | "thin" | "medium" | "thick";
+  strokeColor?: string;
   x?: number;
   y?: number;
   width?: number;
@@ -364,6 +365,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     id: string;
     cornerRounding: number;
     strokeWeight: NonNullable<SlideObjectV1["strokeWeight"]>;
+    strokeColor: string;
     cropMode: boolean;
   } | null>(null);
   const toolbarRafRef = React.useRef<number | null>(null);
@@ -609,6 +611,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       raw.strokeWeight === "thin" || raw.strokeWeight === "medium" || raw.strokeWeight === "thick"
         ? raw.strokeWeight
         : "none";
+    const strokeColor =
+      typeof raw.strokeColor === "string"
+        ? raw.strokeColor
+        : styleDefaults?.palette?.accent ?? "#7c3aed";
 
     setImageToolbar({
       id,
@@ -616,6 +622,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       top,
       cornerRounding,
       strokeWeight,
+      strokeColor,
       cropMode: cropModeRef.current === id
     });
 
@@ -660,7 +667,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           ? raw.strokeWeight
           : "none";
       const strokeWidth = strokeWidthForWeight(strokeWeight);
-      const strokeColor = accentColor;
+      const strokeColor = typeof raw.strokeColor === "string" ? raw.strokeColor : accentColor;
 
       const objects = group.getObjects() as unknown as FabricObject[];
       const innerGroup = objects.find(
@@ -729,8 +736,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       }
 
       // Recompute bounds for accurate selection outlines after updates.
-      (group as unknown as { _calcBounds?: () => void })._calcBounds?.();
-      (group as unknown as { _updateObjectsCoords?: () => void })._updateObjectsCoords?.();
+      innerGroup?.triggerLayout();
+      group.triggerLayout();
       group.setCoords();
       group.canvas?.requestRenderAll();
       return { normalizedOffsetX: crop.normalizedOffsetX, normalizedOffsetY: crop.normalizedOffsetY };
@@ -768,6 +775,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               ? "none"
               : rawObj.strokeWeight
       };
+      if (typeof patch.strokeColor === "string") nextRaw.strokeColor = patch.strokeColor;
 
       const normalized = syncImageGroupAppearance(group, nextRaw, meta);
       const nextObjects = currentSlide.objects.map((o) => {
@@ -1672,6 +1680,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
               canvas.add(frame);
               canvas.sendObjectToBack(frame);
+              frame.triggerLayout();
+              frame.setCoords();
               canvas.requestRenderAll();
             })
             .catch(() => {
@@ -2017,6 +2027,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         >
           <div className="flex items-center gap-1">
             <span className="text-xs text-muted-foreground">Borda</span>
+            <input
+              type="color"
+              value={imageToolbar.strokeColor}
+              onChange={(e) => patchActiveImage({ strokeColor: e.target.value })}
+              className="h-8 w-10 cursor-pointer rounded-lg border bg-background p-1"
+              title="Cor da borda"
+            />
             <button
               type="button"
               onClick={() => patchActiveImage({ strokeWeight: "none" })}
