@@ -111,6 +111,7 @@ async function callGenerateContent(input: {
   model: string;
   system: string;
   user: string;
+  images?: Array<{ mimeType: string; data: string }>;
   version?: "v1beta" | "v1";
 }) {
   const model = normalizeModelId(input.model);
@@ -119,6 +120,29 @@ async function callGenerateContent(input: {
     model
   )}:generateContent?key=${encodeURIComponent(input.apiKey)}`;
 
+  const parts: Array<Record<string, unknown>> = [
+    {
+      text: [
+        input.system,
+        "",
+        "IMPORTANTE: responda SOMENTE com JSON válido. Sem Markdown. Sem texto extra.",
+        "",
+        input.user
+      ].join("\n")
+    }
+  ];
+
+  if (input.images && input.images.length > 0) {
+    for (const img of input.images) {
+      parts.push({
+        inline_data: {
+          mime_type: img.mimeType,
+          data: img.data
+        }
+      });
+    }
+  }
+
   return await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -126,17 +150,7 @@ async function callGenerateContent(input: {
       contents: [
         {
           role: "user",
-          parts: [
-            {
-              text: [
-                input.system,
-                "",
-                "IMPORTANTE: responda SOMENTE com JSON válido. Sem Markdown. Sem texto extra.",
-                "",
-                input.user
-              ].join("\n")
-            }
-          ]
+          parts
         }
       ],
       generationConfig: {
@@ -153,6 +167,7 @@ async function callGenerateContentAnyVersion(input: {
   model: string;
   system: string;
   user: string;
+  images?: Array<{ mimeType: string; data: string }>;
 }): Promise<{ res: Response; json: unknown }> {
   const versions: Array<"v1beta" | "v1"> = ["v1beta", "v1"];
   for (const version of versions) {
@@ -178,6 +193,7 @@ export async function geminiGenerateJson<T>(input: {
   user: string;
   schema: z.ZodType<T>;
   model?: string;
+  images?: Array<{ mimeType: string; data: string }>;
 }): Promise<{ ok: true; data: T } | { ok: false; error: string; raw?: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -192,7 +208,8 @@ export async function geminiGenerateJson<T>(input: {
     apiKey,
     model: preferredModel,
     system: input.system,
-    user: input.user
+    user: input.user,
+    images: input.images
   });
 
   let rawText = getTextFromGeminiResponse(json);
@@ -204,7 +221,8 @@ export async function geminiGenerateJson<T>(input: {
         apiKey,
         model: fallback,
         system: input.system,
-        user: input.user
+        user: input.user,
+        images: input.images
       });
       res = second.res;
       json = second.json;

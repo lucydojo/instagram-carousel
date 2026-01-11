@@ -2,6 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { isRedirectError } from "next/dist/client/components/redirect-error";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { createSignedUrl } from "@/lib/studio/storage";
 import {
   applyNaturalLanguageEdit,
   cleanupPlaceholderGeneratedAssets,
@@ -92,6 +95,86 @@ export async function studioDeletePalette(input: { id: string }) {
   return await deleteUserPalette(input);
 }
 
+export async function studioUploadReferences(formData: FormData) {
+  const carouselId = getCarouselId(formData);
+  const files = formData
+    .getAll("files")
+    .filter((f): f is File => f instanceof File);
+
+  if (!carouselId) {
+    return { ok: false as const, error: "Carrossel inválido." };
+  }
+  if (files.length === 0) {
+    return { ok: false as const, error: "Nenhum arquivo enviado." };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) {
+    return { ok: false as const, error: "UNAUTHENTICATED" };
+  }
+
+  const { data: carousel } = await supabase
+    .from("carousels")
+    .select("id, workspace_id, owner_id")
+    .eq("id", carouselId)
+    .maybeSingle();
+
+  if (!carousel) {
+    return { ok: false as const, error: "Carrossel não encontrado." };
+  }
+  if (carousel.owner_id !== userData.user.id) {
+    return { ok: false as const, error: "Acesso negado." };
+  }
+
+  const admin = createSupabaseAdminClientIfAvailable();
+  const storageClient = admin ?? supabase;
+  const insertedAssets: Array<{ id: string; signedUrl: string | null }> = [];
+
+  for (const file of files) {
+    const ext = file.name.split(".").pop() || "bin";
+    const path = `workspaces/${carousel.workspace_id}/carousels/${carousel.id}/reference/${crypto.randomUUID()}.${ext}`;
+
+    const { error: uploadError } = await storageClient.storage
+      .from("carousel-assets")
+      .upload(path, file, { upsert: false, contentType: file.type });
+
+    if (uploadError) {
+      const message =
+        !admin && uploadError.message.toLowerCase().includes("row-level")
+          ? `${uploadError.message} (Set SUPABASE_SERVICE_ROLE_KEY or add Storage policies for authenticated uploads.)`
+          : uploadError.message;
+      return { ok: false as const, error: message };
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("carousel_assets")
+      .insert({
+        workspace_id: carousel.workspace_id,
+        carousel_id: carousel.id,
+        owner_id: userData.user.id,
+        asset_type: "reference",
+        storage_bucket: "carousel-assets",
+        storage_path: path,
+        mime_type: file.type
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !inserted) {
+      return {
+        ok: false as const,
+        error: insertError?.message ?? "Falha ao salvar referência."
+      };
+    }
+
+    const signed = await createSignedUrl({ bucket: "carousel-assets", path });
+    insertedAssets.push({ id: inserted.id, signedUrl: signed.signedUrl });
+  }
+
+  return { ok: true as const, assets: insertedAssets };
+}
+
 export async function studioGenerate(formData: FormData) {
   const carouselId = getCarouselId(formData);
   const imageModel = formData.get("imageModel")
@@ -100,7 +183,9 @@ export async function studioGenerate(formData: FormData) {
   const result = await generateFirstDraft({ carouselId, imageModel });
   if (!result.ok) {
     const message =
-      result.error === "UNAUTHENTICATED"
+      result.error === "GENERATION_RUNNING"
+        ? "Geração já em andamento."
+        : result.error === "UNAUTHENTICATED"
         ? "Você precisa entrar novamente."
         : String(result.error ?? "Falha ao gerar.");
     redirectBack(carouselId, formData, { error: message });

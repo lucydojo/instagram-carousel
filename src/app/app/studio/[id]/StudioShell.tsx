@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -29,7 +28,8 @@ import {
   studioGenerate,
   studioSaveEditorState,
   studioSaveEditorStateInline,
-  studioSaveLocksInline
+  studioSaveLocksInline,
+  studioUploadReferences
 } from "./actions";
 import { MotionDock, MotionDockItem } from "./MotionDock";
 import FabricSlideCanvas, {
@@ -41,6 +41,15 @@ type Asset = {
   id: string;
   asset_type: "generated" | "reference" | string;
   signedUrl: string | null;
+};
+
+type CreatorProfile = {
+  id: string;
+  display_name: string;
+  handle: string | null;
+  role_title: string | null;
+  avatarUrl: string | null;
+  is_default: boolean;
 };
 
 type SlideLike = Record<string, unknown>;
@@ -58,6 +67,25 @@ function safeParseJson<T>(value: string): T | null {
   } catch {
     return null;
   }
+}
+
+function parseBrandingConfig(input: Record<string, unknown>): BrandingConfig {
+  const raw = input && typeof input === "object" ? input : {};
+  const enabled =
+    typeof (raw as Record<string, unknown>).enabled === "boolean"
+      ? Boolean((raw as Record<string, unknown>).enabled)
+      : true;
+  const profileId =
+    typeof (raw as Record<string, unknown>).profileId === "string"
+      ? String((raw as Record<string, unknown>).profileId)
+      : null;
+  const showOnRaw =
+    typeof (raw as Record<string, unknown>).showOn === "string"
+      ? String((raw as Record<string, unknown>).showOn)
+      : "all";
+  const showOn =
+    showOnRaw === "cover" || showOnRaw === "outro" ? showOnRaw : "all";
+  return { enabled, profileId, showOn };
 }
 
 type Flash = {
@@ -79,6 +107,7 @@ type Props = {
   slides: SlideLike[];
   placeholderCount: number;
   statusLabel: string;
+  generationStatus: string;
   progress: {
     imagesDone: number | null;
     imagesTotal: number | null;
@@ -100,6 +129,7 @@ type Props = {
     is_global: boolean;
     template_data: Record<string, unknown>;
   }>;
+  creatorProfiles: CreatorProfile[];
   catalog: {
     templates: number;
     presets: number;
@@ -159,11 +189,26 @@ type TemplateDataV1 = {
       lineHeightNormal?: number;
     };
     spacing: { padding: number };
-    background: { overlay?: { enabled: boolean; opacity: number; color?: string } };
+    background: {
+      overlay?: {
+        enabled: boolean;
+        opacity: number;
+        color?: string;
+        mode?: "solid" | "bottom-gradient";
+        height?: number;
+      };
+    };
   };
 };
 
 type PaletteV1 = { background: string; text: string; accent: string };
+
+const DEFAULT_PALETTE: PaletteV1 = {
+  background: "#ffffff",
+  text: "#111827",
+  accent: "#7c3aed"
+};
+const CUSTOM_PALETTE_ID = "__custom__";
 type TypographyV1 = {
   titleFontFamily: string;
   bodyFontFamily: string;
@@ -183,7 +228,18 @@ type TypographyV1 = {
   ctaSpacing?: number;
 };
 
-type OverlayV1 = { enabled: boolean; opacity: number; color: string };
+type OverlayV1 = {
+  enabled: boolean;
+  opacity: number;
+  color: string;
+  mode: "solid" | "bottom-gradient";
+  height: number;
+};
+type BrandingConfig = {
+  enabled: boolean;
+  profileId: string | null;
+  showOn: "all" | "cover" | "outro";
+};
 
 type PaletteOption = {
   id: string;
@@ -230,7 +286,15 @@ const BUILTIN_TEMPLATES: TemplateDataV1[] = [
         lineHeightNormal: 1.25
       },
       spacing: { padding: 80 },
-      background: { overlay: { enabled: true, opacity: 0.35, color: "#000000" } }
+      background: {
+        overlay: {
+          enabled: true,
+          opacity: 0.35,
+          color: "#000000",
+          mode: "solid",
+          height: 0.6
+        }
+      }
     }
   },
   {
@@ -318,6 +382,25 @@ function parsePaletteV1(value: unknown): PaletteV1 | null {
   const accent = typeof v.accent === "string" ? v.accent : null;
   if (!background || !text || !accent) return null;
   return { background, text, accent };
+}
+
+function normalizeOverlay(
+  overlay: Partial<OverlayV1> | null | undefined,
+  fallback: OverlayV1
+): OverlayV1 {
+  const enabled = typeof overlay?.enabled === "boolean" ? overlay.enabled : fallback.enabled;
+  const opacity =
+    typeof overlay?.opacity === "number" && Number.isFinite(overlay.opacity)
+      ? clampNumberRange(overlay.opacity, 0, 0.95)
+      : fallback.opacity;
+  const color = typeof overlay?.color === "string" ? overlay.color : fallback.color;
+  const mode =
+    overlay?.mode === "bottom-gradient" ? "bottom-gradient" : fallback.mode;
+  const height =
+    typeof overlay?.height === "number" && Number.isFinite(overlay.height)
+      ? clampNumberRange(overlay.height, 0.2, 1)
+      : fallback.height;
+  return { enabled, opacity, color, mode, height };
 }
 
 function parseTypographyV1(value: unknown): TypographyV1 | null {
@@ -420,6 +503,78 @@ function rectToPct(rect: { x: number; y: number; w: number; h: number }) {
     width: `${rect.w * 100}%`,
     height: `${rect.h * 100}%`
   };
+}
+
+function buildBrandingObjects(input: {
+  slideWidth: number;
+  slideHeight: number;
+  zone: Rect01;
+  profile: CreatorProfile;
+  palette: PaletteV1 | null;
+  typography: TypographyV1;
+}) {
+  const rect = rectToPx(input.zone, input.slideWidth, input.slideHeight);
+  const padding = Math.round(rect.h * 0.12);
+  const avatarSize = Math.max(24, Math.min(rect.h, Math.round(rect.w * 0.22)));
+  const fontSize = Math.max(14, Math.round((input.typography.bodySize ?? 28) * 0.6));
+  const handleRaw = input.profile.handle?.trim() || input.profile.display_name;
+  const handleText = handleRaw.startsWith("@") ? handleRaw : `@${handleRaw}`;
+  const textX = input.profile.avatarUrl ? rect.x + avatarSize + padding : rect.x;
+  const textY = rect.y + Math.max(0, Math.round((rect.h - fontSize) / 2));
+  const textWidth = Math.max(1, rect.w - (textX - rect.x));
+  const fill = input.palette?.text ?? "#111827";
+
+  const objects: SlideLike[] = [
+    {
+      id: "creator_handle",
+      type: "text",
+      variant: "tagline",
+      text: handleText,
+      x: textX,
+      y: textY,
+      width: textWidth,
+      height: Math.round(fontSize * 1.2),
+      fontFamily: input.typography.bodyFontFamily,
+      fontSize,
+      fontWeight: 600,
+      fill,
+      textAlign: "left",
+      lineHeight: 1.2,
+      letterSpacing: 0
+    }
+  ];
+
+  if (input.profile.avatarUrl) {
+    objects.unshift({
+      id: "creator_avatar",
+      type: "image",
+      x: rect.x,
+      y: rect.y,
+      width: avatarSize,
+      height: avatarSize,
+      assetId: `creator:${input.profile.id}`,
+      cornerRounding: 100,
+      strokeWeight: "none"
+    });
+  }
+
+  return objects;
+}
+
+function shouldShowBranding(showOn: BrandingConfig["showOn"], index: number, total: number) {
+  if (showOn === "cover") return index === 0;
+  if (showOn === "outro") return index === Math.max(0, total - 1);
+  return true;
+}
+
+function stripBrandingObjects(objects: SlideLike[]) {
+  return objects.filter((o) => {
+    if (!o || typeof o !== "object") return false;
+    const id = typeof (o as Record<string, unknown>).id === "string"
+      ? String((o as Record<string, unknown>).id)
+      : "";
+    return !id.startsWith("creator_");
+  });
 }
 
 function createStudioId(prefix: string) {
@@ -601,6 +756,11 @@ export default function StudioShell(props: Props) {
     "generated"
   );
   const [extraGeneratedAssets, setExtraGeneratedAssets] = React.useState<Asset[]>([]);
+  const [extraReferenceAssets, setExtraReferenceAssets] = React.useState<Asset[]>([]);
+  const [referenceUploadError, setReferenceUploadError] = React.useState<string | null>(null);
+  const [referenceUploading, setReferenceUploading] = React.useState(false);
+  const MAX_REFERENCE_UPLOAD_BYTES = 500 * 1024 * 1024;
+  const canvasWrapperRef = React.useRef<HTMLDivElement | null>(null);
   const [activeDock, setActiveDock] = React.useState<DockItem>("generate");
   const [editInstruction, setEditInstruction] = React.useState("");
   const [editTarget, setEditTarget] = React.useState<string>(() => String(props.initialSlideIndex));
@@ -628,14 +788,6 @@ export default function StudioShell(props: Props) {
   const historyRef = React.useRef<
     Map<number, { past: string[]; future: string[]; lastPushedAt: number }>
   >(new Map());
-
-  React.useEffect(() => {
-    setDirty(false);
-    setSelectedSlideIndex((current) =>
-      clampInt(current, 1, Math.max(1, props.slideCount))
-    );
-    setSelectedObjectIds([]);
-  }, [props.slideCount]);
 
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -698,19 +850,91 @@ export default function StudioShell(props: Props) {
   const slidesFromState = Array.isArray(editorState.slides)
     ? (editorState.slides as SlideLike[])
     : props.slides;
+  const slideCount = Math.max(1, slidesFromState.length || props.slideCount);
+
+  React.useEffect(() => {
+    setDirty(false);
+    setSelectedSlideIndex((current) => clampInt(current, 1, slideCount));
+    setSelectedObjectIds([]);
+  }, [slideCount]);
   const generatedAssets = React.useMemo(
     () => [...extraGeneratedAssets, ...props.assets.generated],
     [extraGeneratedAssets, props.assets.generated]
   );
-  const assetUrlsById = React.useMemo(() => {
+  const referenceAssets = React.useMemo(
+    () => [...extraReferenceAssets, ...props.assets.reference],
+    [extraReferenceAssets, props.assets.reference]
+  );
+  const creatorAvatarUrls = React.useMemo(() => {
     const map: Record<string, string> = {};
-    for (const a of [...generatedAssets, ...props.assets.reference]) {
+    for (const profile of props.creatorProfiles) {
+      if (!profile.avatarUrl) continue;
+      map[`creator:${profile.id}`] = profile.avatarUrl;
+    }
+    return map;
+  }, [props.creatorProfiles]);
+  const assetUrlsById = React.useMemo(() => {
+    const map: Record<string, string> = { ...creatorAvatarUrls };
+    for (const a of [...generatedAssets, ...referenceAssets]) {
       if (typeof a.id !== "string") continue;
       if (typeof a.signedUrl !== "string" || !a.signedUrl) continue;
       map[a.id] = a.signedUrl;
     }
     return map;
-  }, [generatedAssets, props.assets.reference]);
+  }, [creatorAvatarUrls, generatedAssets, referenceAssets]);
+
+  const handleReferenceUpload = React.useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      if (referenceUploading) return;
+      setReferenceUploadError(null);
+      const totalBytes = Array.from(files).reduce((sum, file) => sum + file.size, 0);
+      if (totalBytes > MAX_REFERENCE_UPLOAD_BYTES) {
+        setReferenceUploadError("Envio excede 500 MB. Remova alguns arquivos e tente novamente.");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.set("carouselId", props.carouselId);
+      Array.from(files).forEach((file) => formData.append("files", file));
+
+      setReferenceUploading(true);
+      try {
+        const res = await studioUploadReferences(formData);
+        if (!res.ok) {
+          setReferenceUploadError(res.error ?? "Falha ao enviar referências.");
+          return;
+        }
+
+        const nextAssets = Array.isArray(res.assets) ? res.assets : [];
+        if (nextAssets.length > 0) {
+          setExtraReferenceAssets((prev) => {
+            const existing = new Set(prev.map((a) => a.id));
+            const merged = [...prev];
+            for (const asset of nextAssets) {
+              if (!asset || typeof asset !== "object") continue;
+              const id =
+                "id" in asset && typeof (asset as { id?: unknown }).id === "string"
+                  ? (asset as { id: string }).id
+                  : null;
+              const signedUrl =
+                "signedUrl" in asset &&
+                typeof (asset as { signedUrl?: unknown }).signedUrl === "string"
+                  ? (asset as { signedUrl: string }).signedUrl
+                  : null;
+              if (!id || existing.has(id)) continue;
+              existing.add(id);
+              merged.push({ id, asset_type: "reference", signedUrl });
+            }
+            return merged;
+          });
+        }
+      } finally {
+        setReferenceUploading(false);
+      }
+    },
+    [props.carouselId, referenceUploading]
+  );
   const selectedSlide =
     slidesFromState.length > 0 ? slidesFromState[selectedSlideIndex - 1] : null;
 
@@ -739,6 +963,23 @@ export default function StudioShell(props: Props) {
         : {};
     return g;
   }, [editorState.global]);
+
+  const currentBranding = React.useMemo(() => {
+    const raw =
+      (currentGlobal as Record<string, unknown>).branding &&
+      typeof (currentGlobal as Record<string, unknown>).branding === "object"
+        ? ((currentGlobal as Record<string, unknown>).branding as Record<
+            string,
+            unknown
+          >)
+        : {};
+    return parseBrandingConfig(raw);
+  }, [currentGlobal]);
+
+  const defaultCreatorProfileId = React.useMemo(() => {
+    const byDefault = props.creatorProfiles.find((p) => p.is_default);
+    return byDefault?.id ?? props.creatorProfiles[0]?.id ?? null;
+  }, [props.creatorProfiles]);
 
   const templateOptions = React.useMemo(() => {
     const fromDb: TemplateDataV1[] = props.templates
@@ -841,6 +1082,14 @@ export default function StudioShell(props: Props) {
         : 0.35;
     const fallbackColor =
       templateOv && typeof templateOv.color === "string" ? templateOv.color : "#000000";
+    const fallbackMode =
+      templateOv && typeof templateOv.mode === "string" && templateOv.mode === "bottom-gradient"
+        ? "bottom-gradient"
+        : "solid";
+    const fallbackHeight =
+      templateOv && typeof templateOv.height === "number" && Number.isFinite(templateOv.height)
+        ? clampNumberRange(templateOv.height, 0.2, 1)
+        : 0.6;
 
     const enabled = hasOverlay ? Boolean(ov.enabled) : fallbackEnabled;
     const opacity =
@@ -848,8 +1097,36 @@ export default function StudioShell(props: Props) {
         ? clampNumberRange(ov.opacity, 0, 0.95)
         : fallbackOpacity;
     const color = typeof ov.color === "string" ? ov.color : fallbackColor;
-    return { enabled, opacity, color };
+    const mode =
+      typeof ov.mode === "string" && ov.mode === "bottom-gradient"
+        ? "bottom-gradient"
+        : fallbackMode;
+    const height =
+      typeof ov.height === "number" && Number.isFinite(ov.height)
+        ? clampNumberRange(ov.height, 0.2, 1)
+        : fallbackHeight;
+    return { enabled, opacity, color, mode, height };
   }, [currentGlobal, effectiveTemplate.defaults.background.overlay]);
+
+  const slideOverlayOverride = React.useMemo(() => {
+    if (!selectedSlide || typeof selectedSlide !== "object") return null;
+    const slideObj = selectedSlide as Record<string, unknown>;
+    const bg =
+      slideObj.background && typeof slideObj.background === "object"
+        ? (slideObj.background as Record<string, unknown>)
+        : null;
+    if (!bg) return null;
+    const scope = bg.overlayScope === "slide" ? "slide" : "global";
+    const overlay = bg.overlay as Partial<OverlayV1> | undefined;
+    return { scope, overlay };
+  }, [selectedSlide]);
+
+  const overlayScope: "global" | "slide" =
+    slideOverlayOverride?.scope === "slide" ? "slide" : "global";
+  const activeOverlay =
+    overlayScope === "slide"
+      ? normalizeOverlay(slideOverlayOverride?.overlay, globalOverlay)
+      : globalOverlay;
 
   const [paletteOptions, setPaletteOptions] = React.useState<PaletteOption[]>(() =>
     parsePaletteOptionsFromProps(props.palettes)
@@ -878,24 +1155,64 @@ export default function StudioShell(props: Props) {
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [paletteOptions]);
 
-  const selectedPaletteId =
-    typeof currentGlobal.paletteId === "string" &&
-    paletteOptions.some((p) => p.id === currentGlobal.paletteId)
-      ? currentGlobal.paletteId
-      : globalPaletteOptions[0]?.id ?? userPaletteOptions[0]?.id ?? null;
+  const rawGlobalPaletteId =
+    typeof currentGlobal.paletteId === "string" ? currentGlobal.paletteId : null;
+  const globalPaletteId =
+    rawGlobalPaletteId && paletteOptions.some((p) => p.id === rawGlobalPaletteId)
+      ? rawGlobalPaletteId
+      : null;
+
+  const globalPaletteData = React.useMemo(() => {
+    return parsePaletteV1(currentGlobal.paletteData) ?? DEFAULT_PALETTE;
+  }, [currentGlobal.paletteData]);
+
+  const selectedPalette = React.useMemo(() => {
+    if (!globalPaletteId) return null;
+    return paletteOptions.find((p) => p.id === globalPaletteId) ?? null;
+  }, [paletteOptions, globalPaletteId]);
+
+  const slidePaletteOverride = React.useMemo(() => {
+    if (!selectedSlide || typeof selectedSlide !== "object") return null;
+    const slideObj = selectedSlide as Record<string, unknown>;
+    const paletteData = parsePaletteV1(slideObj.paletteData);
+    if (!paletteData) return null;
+    const rawId = typeof slideObj.paletteId === "string" ? slideObj.paletteId : null;
+    const validId = rawId && paletteOptions.some((p) => p.id === rawId) ? rawId : null;
+    return { palette: paletteData, paletteId: validId };
+  }, [paletteOptions, selectedSlide]);
+
+  const paletteScope: "global" | "slide" = slidePaletteOverride ? "slide" : "global";
+  const activePalette = slidePaletteOverride?.palette ?? globalPaletteData;
+  const activePaletteKey = slidePaletteOverride
+    ? slidePaletteOverride.paletteId ?? CUSTOM_PALETTE_ID
+    : globalPaletteId ?? CUSTOM_PALETTE_ID;
+  const isCustomPaletteActive = activePaletteKey === CUSTOM_PALETTE_ID;
+
+  const brandingProfileId =
+    currentBranding.profileId ?? defaultCreatorProfileId ?? null;
+  const brandingProfile = React.useMemo(
+    () => props.creatorProfiles.find((p) => p.id === brandingProfileId) ?? null,
+    [brandingProfileId, props.creatorProfiles]
+  );
+
+  const hasBrandingObjects = React.useMemo(() => {
+    return slidesFromState.some((s) => {
+      if (!s || typeof s !== "object") return false;
+      const objects = Array.isArray((s as Record<string, unknown>).objects)
+        ? ((s as Record<string, unknown>).objects as Record<string, unknown>[])
+        : [];
+      return objects.some((o) => {
+        const id = typeof o?.id === "string" ? o.id : "";
+        return id.startsWith("creator_");
+      });
+    });
+  }, [slidesFromState]);
 
   const [pendingTemplateId, setPendingTemplateId] = React.useState(selectedTemplateId);
-  const [pendingPaletteId, setPendingPaletteId] = React.useState<string | null>(
-    selectedPaletteId
-  );
 
   React.useEffect(() => {
     setPendingTemplateId(selectedTemplateId);
   }, [selectedTemplateId]);
-
-  React.useEffect(() => {
-    setPendingPaletteId(selectedPaletteId);
-  }, [selectedPaletteId]);
 
   const applyTemplate = React.useCallback(
     (template: TemplateDataV1) => {
@@ -903,6 +1220,17 @@ export default function StudioShell(props: Props) {
         const prevSlides = Array.isArray(prev.slides)
           ? ([...(prev.slides as SlideLike[])] as SlideLike[])
           : [...props.slides];
+        const totalSlides = prevSlides.length;
+        const brandingConfig = currentBranding;
+        const brandingProfileId =
+          brandingConfig.profileId ?? defaultCreatorProfileId ?? null;
+        const brandingProfile = props.creatorProfiles.find(
+          (profile) => profile.id === brandingProfileId
+        );
+        const shouldApplyBranding =
+          brandingConfig.enabled &&
+          Boolean(brandingProfile) &&
+          Boolean(template.zones.creator);
 
         const templateOverlay: OverlayV1 = {
           enabled: Boolean(template.defaults.background.overlay?.enabled),
@@ -914,10 +1242,19 @@ export default function StudioShell(props: Props) {
           color:
             typeof template.defaults.background.overlay?.color === "string"
               ? template.defaults.background.overlay.color
-              : "#000000"
+              : "#000000",
+          mode:
+            template.defaults.background.overlay?.mode === "bottom-gradient"
+              ? "bottom-gradient"
+              : "solid",
+          height:
+            typeof template.defaults.background.overlay?.height === "number" &&
+            Number.isFinite(template.defaults.background.overlay.height)
+              ? clampNumberRange(template.defaults.background.overlay.height, 0.2, 1)
+              : 0.6
         };
 
-        const nextSlides = prevSlides.map((s) => {
+        const nextSlides = prevSlides.map((s, idx) => {
           if (!s || typeof s !== "object") return s;
           const slideObj = s as Record<string, unknown>;
           const w =
@@ -992,10 +1329,27 @@ export default function StudioShell(props: Props) {
                 >)
               : {};
           background.overlay = templateOverlay;
+          const baseObjects = stripBrandingObjects([...nextObjects, ...placeholders]);
+          const withBranding =
+            shouldApplyBranding && brandingProfile
+              ? shouldShowBranding(brandingConfig.showOn, idx, totalSlides)
+                ? [
+                    ...baseObjects,
+                    ...buildBrandingObjects({
+                      slideWidth: w,
+                      slideHeight: h,
+                      zone: template.zones.creator,
+                      profile: brandingProfile,
+                      palette: selectedPalette?.palette ?? globalPaletteData ?? null,
+                      typography: globalTypography
+                    })
+                  ]
+                : baseObjects
+              : baseObjects;
           return {
             ...slideObj,
             background,
-            objects: [...nextObjects, ...placeholders]
+            objects: withBranding
           };
         });
 
@@ -1024,40 +1378,141 @@ export default function StudioShell(props: Props) {
           templateId: template.id,
           templateData: template,
           typography: nextTypography,
-          background: globalBg
+          background: globalBg,
+          branding: {
+            ...brandingConfig,
+            profileId: brandingProfileId
+          }
         };
         return { ...prev, global: nextGlobal, slides: nextSlides };
       });
       setDirty(true);
       setCanvasRevision((v) => v + 1);
     },
-    [props.slides]
+    [
+      currentBranding,
+      defaultCreatorProfileId,
+      globalTypography,
+      props.creatorProfiles,
+      props.slides,
+      selectedPalette
+    ]
   );
 
+  const applyBranding = React.useCallback(
+    (partial: Partial<BrandingConfig>) => {
+      setEditorState((prev) => {
+        const prevGlobal =
+          prev.global && typeof prev.global === "object"
+            ? (prev.global as Record<string, unknown>)
+            : {};
+        const baseBranding = parseBrandingConfig(
+          (prevGlobal.branding as Record<string, unknown>) ?? {}
+        );
+        const nextBranding: BrandingConfig = {
+          ...baseBranding,
+          ...partial
+        };
+        if (!nextBranding.profileId && defaultCreatorProfileId) {
+          nextBranding.profileId = defaultCreatorProfileId;
+        }
+        const profile = nextBranding.profileId
+          ? props.creatorProfiles.find((p) => p.id === nextBranding.profileId) ?? null
+          : null;
+        const prevSlides = Array.isArray(prev.slides)
+          ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+          : [...props.slides];
+        const total = prevSlides.length;
+        const nextSlides = prevSlides.map((s, idx) => {
+          if (!s || typeof s !== "object") return s;
+          const slideObj = s as Record<string, unknown>;
+          const w =
+            typeof slideObj.width === "number" ? (slideObj.width as number) : 1080;
+          const h =
+            typeof slideObj.height === "number" ? (slideObj.height as number) : 1080;
+          const objects = Array.isArray(slideObj.objects)
+            ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
+            : [];
+          const baseObjects = stripBrandingObjects(objects);
+          if (
+            !nextBranding.enabled ||
+            !profile ||
+            !effectiveTemplate.zones.creator ||
+            !shouldShowBranding(nextBranding.showOn, idx, total)
+          ) {
+            return { ...slideObj, objects: baseObjects };
+          }
+          const brandingObjects = buildBrandingObjects({
+            slideWidth: w,
+            slideHeight: h,
+            zone: effectiveTemplate.zones.creator,
+            profile,
+            palette: selectedPalette?.palette ?? globalPaletteData ?? null,
+            typography: globalTypography
+          });
+          return { ...slideObj, objects: [...baseObjects, ...brandingObjects] };
+        });
+        const nextGlobal = { ...prevGlobal, branding: nextBranding };
+        return { ...prev, global: nextGlobal, slides: nextSlides };
+      });
+      setDirty(true);
+      setCanvasRevision((v) => v + 1);
+    },
+    [
+      defaultCreatorProfileId,
+      effectiveTemplate.zones.creator,
+      globalPaletteData,
+      globalTypography,
+      props.creatorProfiles,
+      props.slides,
+      selectedPalette
+    ]
+  );
+
+  React.useEffect(() => {
+    if (!currentBranding.enabled) return;
+    if (!brandingProfile) return;
+    if (!effectiveTemplate.zones.creator) return;
+    if (hasBrandingObjects) return;
+    applyBranding({});
+  }, [
+    applyBranding,
+    brandingProfile,
+    currentBranding.enabled,
+    effectiveTemplate.zones.creator,
+    hasBrandingObjects
+  ]);
+
   const applyPaletteColors = React.useCallback(
-    (palette: PaletteV1, paletteId: string | null) => {
+    (palette: PaletteV1, paletteId: string | null, scope: "global" | "slide" = "global") => {
       setEditorState((prev) => {
         const prevSlides = Array.isArray(prev.slides)
           ? ([...(prev.slides as SlideLike[])] as SlideLike[])
           : [...props.slides];
 
-        const nextSlides = prevSlides.map((s) => {
+        const targetIndex = clampInt(selectedSlideIndex - 1, 0, prevSlides.length - 1);
+        const nextSlides = prevSlides.map((s, idx) => {
           if (!s || typeof s !== "object") return s;
           const slideObj = s as Record<string, unknown>;
           const objects = Array.isArray(slideObj.objects)
             ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
             : [];
-          const nextObjects = objects.map((o) => {
-            if (o.type !== "text") return o;
-            const id = typeof o.id === "string" ? o.id : null;
-            const variant =
-              typeof (o as Record<string, unknown>).variant === "string"
-                ? String((o as Record<string, unknown>).variant)
-                : null;
-            const key = id === "swipe" ? "body" : (variant ?? id ?? "body");
-            const fill = key === "title" ? palette.accent : palette.text;
-            return { ...o, fill };
-          });
+          const hasOverride = Boolean(parsePaletteV1(slideObj.paletteData));
+          const shouldApply =
+            scope === "slide" ? idx === targetIndex : !hasOverride;
+          const nextObjects = shouldApply
+            ? objects.map((o) => {
+                if (o.type !== "text") return o;
+                const id = typeof o.id === "string" ? o.id : null;
+                const variant =
+                  typeof (o as Record<string, unknown>).variant === "string"
+                    ? String((o as Record<string, unknown>).variant)
+                    : null;
+                const key = id === "swipe" ? "body" : (variant ?? id ?? "body");
+                const fill = key === "title" ? palette.accent : palette.text;
+                return { ...o, fill };
+              })
+            : objects;
           const background =
             slideObj.background && typeof slideObj.background === "object"
               ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
@@ -1065,27 +1520,84 @@ export default function StudioShell(props: Props) {
                   unknown
                 >)
               : {};
-          background.color = palette.background;
-          return { ...slideObj, background, objects: nextObjects };
+          if (shouldApply) {
+            background.color = palette.background;
+          }
+          const nextSlide = { ...slideObj, background, objects: nextObjects };
+          if (scope === "slide" && idx === targetIndex) {
+            nextSlide.paletteId = paletteId;
+            nextSlide.paletteData = palette;
+          }
+          return nextSlide;
         });
 
         const prevGlobal =
           prev.global && typeof prev.global === "object"
             ? (prev.global as Record<string, unknown>)
             : {};
-        const nextGlobal = {
-          ...prevGlobal,
-          paletteId,
-          paletteData: palette
-        };
+        const nextGlobal =
+          scope === "global"
+            ? {
+                ...prevGlobal,
+                paletteId,
+                paletteData: palette
+              }
+            : prevGlobal;
 
         return { ...prev, global: nextGlobal, slides: nextSlides };
       });
       setDirty(true);
       setCanvasRevision((v) => v + 1);
     },
-    [props.slides]
+    [props.slides, selectedSlideIndex]
   );
+
+  const clearSlidePaletteOverride = React.useCallback(() => {
+    setEditorState((prev) => {
+      const prevSlides = Array.isArray(prev.slides)
+        ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+        : [...props.slides];
+      const idx = clampInt(selectedSlideIndex - 1, 0, prevSlides.length - 1);
+      const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
+      if (!slide || typeof slide !== "object") return prev;
+
+      const slideObj = slide as Record<string, unknown>;
+      const objects = Array.isArray(slideObj.objects)
+        ? ([...(slideObj.objects as unknown[])] as Record<string, unknown>[])
+        : [];
+      const prevGlobal =
+        prev.global && typeof prev.global === "object"
+          ? (prev.global as Record<string, unknown>)
+          : {};
+      const palette = parsePaletteV1(prevGlobal.paletteData) ?? DEFAULT_PALETTE;
+      const nextObjects = objects.map((o) => {
+        if (o.type !== "text") return o;
+        const id = typeof o.id === "string" ? o.id : null;
+        const variant =
+          typeof (o as Record<string, unknown>).variant === "string"
+            ? String((o as Record<string, unknown>).variant)
+            : null;
+        const key = id === "swipe" ? "body" : (variant ?? id ?? "body");
+        const fill = key === "title" ? palette.accent : palette.text;
+        return { ...o, fill };
+      });
+      const background =
+        slideObj.background && typeof slideObj.background === "object"
+          ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
+              string,
+              unknown
+            >)
+          : {};
+      background.color = palette.background;
+      const nextSlide = { ...slideObj, background, objects: nextObjects };
+      delete (nextSlide as Record<string, unknown>).paletteId;
+      delete (nextSlide as Record<string, unknown>).paletteData;
+      prevSlides[idx] = nextSlide;
+      return { ...prev, slides: prevSlides };
+    });
+    setDirty(true);
+    setCanvasRevision((v) => v + 1);
+  }, [props.slides, selectedSlideIndex]);
 
   const applyTypography = React.useCallback(
     (typography: TypographyV1) => {
@@ -1180,14 +1692,16 @@ export default function StudioShell(props: Props) {
   );
 
   const applyOverlay = React.useCallback(
-    (overlay: OverlayV1) => {
+    (overlay: OverlayV1, scope: "global" | "slide" = "global") => {
       setEditorState((prev) => {
         const prevSlides = Array.isArray(prev.slides)
           ? ([...(prev.slides as SlideLike[])] as SlideLike[])
           : [...props.slides];
+        const targetIndex = clampInt(selectedSlideIndex - 1, 0, prevSlides.length - 1);
 
-        const nextSlides = prevSlides.map((s) => {
+        const nextSlides = prevSlides.map((s, idx) => {
           if (!s || typeof s !== "object") return s;
+          if (scope === "slide" && idx !== targetIndex) return s;
           const slideObj = s as Record<string, unknown>;
           const background =
             slideObj.background && typeof slideObj.background === "object"
@@ -1196,7 +1710,10 @@ export default function StudioShell(props: Props) {
                   unknown
                 >)
               : {};
+          const isOverride = background.overlayScope === "slide";
+          if (scope === "global" && isOverride) return s;
           background.overlay = overlay;
+          if (scope === "slide") background.overlayScope = "slide";
           return { ...slideObj, background };
         });
 
@@ -1204,47 +1721,238 @@ export default function StudioShell(props: Props) {
           prev.global && typeof prev.global === "object"
             ? (prev.global as Record<string, unknown>)
             : {};
-        const globalBg =
-          prevGlobal.background && typeof prevGlobal.background === "object"
-            ? ({ ...(prevGlobal.background as Record<string, unknown>) } as Record<
-                string,
-                unknown
-              >)
-            : {};
-        globalBg.overlay = overlay;
-
-        const nextGlobal = {
-          ...prevGlobal,
-          background: globalBg
-        };
+        const nextGlobal =
+          scope === "global"
+            ? (() => {
+                const globalBg =
+                  prevGlobal.background && typeof prevGlobal.background === "object"
+                    ? ({ ...(prevGlobal.background as Record<string, unknown>) } as Record<
+                        string,
+                        unknown
+                      >)
+                    : {};
+                globalBg.overlay = overlay;
+                return { ...prevGlobal, background: globalBg };
+              })()
+            : prevGlobal;
 
         return { ...prev, global: nextGlobal, slides: nextSlides };
       });
       setDirty(true);
       setCanvasRevision((v) => v + 1);
     },
-    [props.slides]
+    [props.slides, selectedSlideIndex]
   );
 
+  const clearSlideOverlayOverride = React.useCallback(() => {
+    setEditorState((prev) => {
+      const prevSlides = Array.isArray(prev.slides)
+        ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+        : [...props.slides];
+      const idx = clampInt(selectedSlideIndex - 1, 0, prevSlides.length - 1);
+      const slide = idx >= 0 && idx < prevSlides.length ? prevSlides[idx] : null;
+      if (!slide || typeof slide !== "object") return prev;
+      const slideObj = slide as Record<string, unknown>;
+      const background =
+        slideObj.background && typeof slideObj.background === "object"
+          ? ({ ...(slideObj.background as Record<string, unknown>) } as Record<
+              string,
+              unknown
+            >)
+          : {};
+      background.overlay = globalOverlay;
+      delete (background as Record<string, unknown>).overlayScope;
+      const nextSlide = { ...slideObj, background };
+      prevSlides[idx] = nextSlide;
+      return { ...prev, slides: prevSlides };
+    });
+    setDirty(true);
+    setCanvasRevision((v) => v + 1);
+  }, [globalOverlay, props.slides, selectedSlideIndex]);
+
   const [customPalette, setCustomPalette] = React.useState<PaletteV1>(() => {
-    const fromGlobal = parsePaletteV1(currentGlobal.paletteData);
-    return (
-      fromGlobal ?? {
-        background: "#ffffff",
-        text: "#111827",
-        accent: "#7c3aed"
-      }
-    );
+    return parsePaletteV1(currentGlobal.paletteData) ?? DEFAULT_PALETTE;
   });
 
-  const appliedPalette = React.useMemo(() => {
-    return parsePaletteV1((currentGlobal as Record<string, unknown>).paletteData) ?? customPalette;
-  }, [currentGlobal, customPalette]);
-
   React.useEffect(() => {
-    const fromGlobal = parsePaletteV1(currentGlobal.paletteData);
-    if (fromGlobal) setCustomPalette(fromGlobal);
-  }, [currentGlobal.paletteData]);
+    if (!isCustomPaletteActive) return;
+    setCustomPalette(activePalette);
+  }, [activePalette, isCustomPaletteActive]);
+
+  const handlePaletteScopeChange = React.useCallback(
+    (nextScope: "global" | "slide") => {
+      if (nextScope === paletteScope) return;
+      if (nextScope === "slide") {
+        const paletteId = activePaletteKey === CUSTOM_PALETTE_ID ? null : activePaletteKey;
+        applyPaletteColors(activePalette, paletteId, "slide");
+        return;
+      }
+      clearSlidePaletteOverride();
+    },
+    [
+      activePalette,
+      activePaletteKey,
+      applyPaletteColors,
+      clearSlidePaletteOverride,
+      paletteScope
+    ]
+  );
+
+  const handleSelectCustomPalette = React.useCallback(() => {
+    applyPaletteColors(customPalette, null, paletteScope);
+  }, [applyPaletteColors, customPalette, paletteScope]);
+
+  const handleOverlayScopeChange = React.useCallback(
+    (nextScope: "global" | "slide") => {
+      if (nextScope === overlayScope) return;
+      if (nextScope === "slide") {
+        applyOverlay(activeOverlay, "slide");
+        return;
+      }
+      clearSlideOverlayOverride();
+    },
+    [activeOverlay, applyOverlay, clearSlideOverlayOverride, overlayScope]
+  );
+
+  const createBlankSlide = React.useCallback(() => {
+    const w = effectiveTemplate.slide.width;
+    const h = effectiveTemplate.slide.height;
+    const objects: Array<Record<string, unknown>> = [];
+    const pushText = (
+      role: "title" | "body" | "cta" | "tagline" | "swipe",
+      zone?: Rect01
+    ) => {
+      if (!zone) return;
+      const rect = rectToPx(zone, w, h);
+      const isTitle = role === "title";
+      const isBody = role === "body";
+      const isCta = role === "cta";
+      const isTagline = role === "tagline";
+      const text =
+        role === "swipe"
+          ? "Arraste →"
+          : isTitle
+            ? "Título"
+            : isBody
+              ? "Texto"
+              : isCta
+                ? "Chamada"
+                : "Subtítulo";
+      objects.push({
+        id: role,
+        type: "text",
+        variant: role === "swipe" ? "custom" : role,
+        x: rect.x,
+        y: rect.y,
+        width: rect.w,
+        height: rect.h,
+        text,
+        fontFamily: isTitle
+          ? globalTypography.titleFontFamily
+          : globalTypography.bodyFontFamily,
+        fontSize: isTitle
+          ? globalTypography.titleSize
+          : isBody
+            ? globalTypography.bodySize
+            : isCta
+              ? globalTypography.ctaSize ??
+                Math.max(14, Math.round(globalTypography.bodySize * 0.82))
+              : isTagline
+                ? globalTypography.taglineSize ??
+                  Math.max(14, Math.round(globalTypography.bodySize * 0.6))
+                : 24,
+        fill: isTitle ? globalPaletteData.accent : globalPaletteData.text,
+        fontWeight: isTitle ? 700 : 600,
+        lineHeight: isTitle
+          ? globalTypography.titleLineHeight ?? 1.1
+          : globalTypography.bodyLineHeight ?? 1.25,
+        letterSpacing: isTitle
+          ? globalTypography.titleSpacing ?? 0
+          : globalTypography.bodySpacing ?? 0
+      });
+    };
+
+    pushText("title", effectiveTemplate.zones.title);
+    pushText("body", effectiveTemplate.zones.body);
+    pushText("cta", effectiveTemplate.zones.cta);
+    pushText("tagline", effectiveTemplate.zones.tagline);
+    pushText("swipe", effectiveTemplate.zones.swipe);
+
+    for (const img of effectiveTemplate.images) {
+      if (img.kind !== "slot") continue;
+      const rect = rectToPx(img.bounds, w, h);
+      objects.push({
+        id: `image_${img.id}`,
+        type: "image",
+        slotId: img.id,
+        x: rect.x,
+        y: rect.y,
+        width: rect.w,
+        height: rect.h,
+        assetId: null
+      });
+    }
+
+    return {
+      id: createStudioId("slide"),
+      width: w,
+      height: h,
+      background: {
+        color: globalPaletteData.background,
+        overlay: globalOverlay
+      },
+      objects
+    } as SlideV1;
+  }, [
+    globalPaletteData.accent,
+    globalPaletteData.background,
+    globalPaletteData.text,
+    effectiveTemplate.images,
+    effectiveTemplate.slide.height,
+    effectiveTemplate.slide.width,
+    effectiveTemplate.zones.body,
+    effectiveTemplate.zones.cta,
+    effectiveTemplate.zones.swipe,
+    effectiveTemplate.zones.tagline,
+    effectiveTemplate.zones.title,
+    globalOverlay,
+    globalTypography
+  ]);
+
+  const addBlankSlide = React.useCallback(() => {
+    const nextSlide = createBlankSlide();
+    setEditorState((prev) => {
+      const prevSlides = Array.isArray(prev.slides)
+        ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+        : [...props.slides];
+      const insertAt = clampInt(selectedSlideIndex, 0, prevSlides.length);
+      const next = [...prevSlides];
+      next.splice(insertAt, 0, nextSlide);
+      return { ...prev, slides: next };
+    });
+    setSelectedSlideIndex((current) => clampInt(current + 1, 1, slideCount + 1));
+    setDirty(true);
+    setCanvasRevision((v) => v + 1);
+  }, [createBlankSlide, props.slides, selectedSlideIndex, slideCount]);
+
+  const removeSelectedSlide = React.useCallback(() => {
+    if (slideCount <= 1) return;
+    setEditorState((prev) => {
+      const prevSlides = Array.isArray(prev.slides)
+        ? ([...(prev.slides as SlideLike[])] as SlideLike[])
+        : [...props.slides];
+      const idx = clampInt(selectedSlideIndex - 1, 0, prevSlides.length - 1);
+      const next = [...prevSlides];
+      next.splice(idx, 1);
+      return { ...prev, slides: next };
+    });
+    setSelectedSlideIndex((current) =>
+      clampInt(Math.min(current, slideCount - 1), 1, slideCount - 1)
+    );
+    setSelectedObjectIds([]);
+    setDirty(true);
+    setCanvasRevision((v) => v + 1);
+  }, [props.slides, selectedSlideIndex, slideCount]);
 
   const saveCustomPalette = React.useCallback(async () => {
     const name = `Custom ${new Date().toLocaleDateString("pt-BR")}`;
@@ -1283,18 +1991,18 @@ export default function StudioShell(props: Props) {
         return;
       }
       setPaletteOptions((prev) => prev.filter((p) => p.id !== id));
-      if (pendingPaletteId === id) {
+      if (activePaletteKey === id) {
         // Keep the currently applied colors, but detach from the deleted id.
-        setPendingPaletteId(null);
-        applyPaletteColors(customPalette, null);
+        applyPaletteColors(activePalette, null, paletteScope);
       }
     },
-    [applyPaletteColors, customPalette, paletteOptions, pendingPaletteId]
+    [activePalette, activePaletteKey, applyPaletteColors, paletteOptions, paletteScope]
   );
 
   const imagesTotal = props.progress.imagesTotal;
   const imagesDone = props.progress.imagesDone;
   const imagesFailed = props.progress.imagesFailed;
+  const isGenerating = props.generationStatus === "running";
 
   const progressPct =
     typeof imagesTotal === "number" &&
@@ -1848,7 +2556,7 @@ export default function StudioShell(props: Props) {
                       ? globalTypography.taglineSize ??
                         Math.max(14, Math.round(globalTypography.bodySize * 0.6))
                       : 24,
-              fill: isTitle ? appliedPalette.accent : appliedPalette.text,
+              fill: isTitle ? activePalette.accent : activePalette.text,
               fontWeight: isTitle ? 700 : 600,
               lineHeight: isTitle
                 ? globalTypography.titleLineHeight ?? 1.1
@@ -1867,7 +2575,7 @@ export default function StudioShell(props: Props) {
       setDirty(true);
       setCanvasRevision((v) => v + 1);
     },
-    [appliedPalette.accent, appliedPalette.text, effectiveTemplate.zones, globalTypography, props.slides, selectedSlideIndex]
+    [activePalette.accent, activePalette.text, effectiveTemplate.zones, globalTypography, props.slides, selectedSlideIndex]
   );
 
   const onCanvasSlideChange = React.useCallback(
@@ -1924,8 +2632,8 @@ export default function StudioShell(props: Props) {
 
       setSelectedSlideIndex((current) => {
         const cur = current - 1;
-        const safeFrom = clampInt(from, 0, props.slideCount - 1);
-        const safeTo = clampInt(to, 0, props.slideCount - 1);
+        const safeFrom = clampInt(from, 0, slideCount - 1);
+        const safeTo = clampInt(to, 0, slideCount - 1);
         if (cur === safeFrom) return safeTo + 1;
         if (safeFrom < safeTo) {
           if (cur > safeFrom && cur <= safeTo) return cur; // (cur-1)+1
@@ -1935,7 +2643,7 @@ export default function StudioShell(props: Props) {
         return current;
       });
     },
-    [props.slideCount, props.slides]
+    [props.slides, slideCount]
   );
 
   const downloadActiveSlidePng = React.useCallback(() => {
@@ -2230,8 +2938,9 @@ export default function StudioShell(props: Props) {
                               </label>
                           <select
                             name="imageModel"
-                            className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                            className="w-full rounded-xl border bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                             defaultValue=""
+                            disabled={isGenerating}
                           >
                             <option value="">Automático (padrão)</option>
                             {props.imageModels.map((m) => (
@@ -2246,10 +2955,11 @@ export default function StudioShell(props: Props) {
                         </div>
 
                         <button
-                          className="w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                          className="w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                           type="submit"
+                          disabled={isGenerating}
                         >
-                          Gerar rascunho
+                          {isGenerating ? "Gerando..." : "Gerar rascunho"}
                         </button>
                       </form>
 
@@ -2356,20 +3066,22 @@ export default function StudioShell(props: Props) {
                       >
                         <textarea
                           name="instruction"
-                          className="h-24 w-full rounded-xl border bg-background p-3 text-sm"
+                          className="h-24 w-full rounded-xl border bg-background p-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           placeholder='Ex: “Deixe o título mais forte e encurte o texto do corpo.”'
                           required
                           value={editInstruction}
                           onChange={(e) => setEditInstruction(e.target.value)}
+                          disabled={isGenerating}
                         />
                         <div className="flex items-center gap-2">
                           <select
                             name="slideIndex"
-                            className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                            className="w-full rounded-xl border bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                             value={editTarget}
                             onChange={(e) => setEditTarget(e.target.value)}
+                            disabled={isGenerating}
                           >
-                            {Array.from({ length: props.slideCount }, (_, i) => (
+                            {Array.from({ length: slideCount }, (_, i) => (
                               <option key={i + 1} value={i + 1}>
                                 Slide {i + 1}
                               </option>
@@ -2377,8 +3089,9 @@ export default function StudioShell(props: Props) {
                             <option value="">Todos</option>
                           </select>
                           <button
-                            className="whitespace-nowrap rounded-xl bg-foreground px-3 py-2 text-sm font-medium text-background hover:bg-foreground/90"
+                            className="whitespace-nowrap rounded-xl bg-foreground px-3 py-2 text-sm font-medium text-background hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-60"
                             type="submit"
+                            disabled={isGenerating}
                           >
                             {isPending ? "Aplicando..." : "Aplicar"}
                           </button>
@@ -2496,13 +3209,34 @@ export default function StudioShell(props: Props) {
                           />
                         ) : null}
                       </div>
-	                    </section>
+                    </section>
 
-	                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
-	                      <div className="text-base font-medium">Ordem dos slides</div>
-	                      <div className="text-xs text-muted-foreground">
-	                        Arraste para reordenar. (MVP)
-	                      </div>
+                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
+                      <div className="text-base font-medium">Slides</div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={addBlankSlide}
+                          className="flex-1 rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
+                        >
+                          Adicionar slide
+                        </button>
+                        <button
+                          type="button"
+                          onClick={removeSelectedSlide}
+                          disabled={slideCount <= 1}
+                          className="flex-1 rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Remover slide
+                        </button>
+                      </div>
+                    </section>
+
+                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
+                      <div className="text-base font-medium">Ordem dos slides</div>
+                      <div className="text-xs text-muted-foreground">
+                        Arraste para reordenar. (MVP)
+                      </div>
 	                      <div className="space-y-2">
 	                        <div
 	                          className="rounded-xl border border-dashed bg-background/40 px-3 py-2 text-xs text-muted-foreground"
@@ -2624,7 +3358,7 @@ export default function StudioShell(props: Props) {
                             : "hover:bg-secondary"
                         ].join(" ")}
                       >
-                        Referências ({props.assets.reference.length})
+                        Referências ({referenceAssets.length})
                       </button>
                     </div>
 
@@ -2662,21 +3396,33 @@ export default function StudioShell(props: Props) {
                           <div className="text-xs text-muted-foreground">
                             Envie imagens para guiar estilo/tema.
                           </div>
-                          <Link
-                            href={`/app/carousels/${props.carouselId}/upload`}
-                            className="rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary"
-                          >
-                            Enviar
-                          </Link>
+                          <label className="rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary">
+                            <input
+                              type="file"
+                              className="sr-only"
+                              accept="image/*"
+                              multiple
+                              disabled={referenceUploading}
+                              onChange={(e) => {
+                                void handleReferenceUpload(e.target.files);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                            {referenceUploading ? "Enviando..." : "Enviar"}
+                          </label>
                         </div>
 
-                        {props.assets.reference.length === 0 ? (
+                        {referenceUploadError ? (
+                          <div className="text-xs text-red-600">{referenceUploadError}</div>
+                        ) : null}
+
+                        {referenceAssets.length === 0 ? (
                           <div className="text-xs text-muted-foreground">
                             Nenhuma referência enviada.
                           </div>
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
-	                            {props.assets.reference.slice(0, 12).map((a) => (
+	                            {referenceAssets.slice(0, 12).map((a) => (
 	                              <button
 	                                key={a.id}
 	                                type="button"
@@ -2769,36 +3515,164 @@ export default function StudioShell(props: Props) {
                 {showBrand ? (
                   <div className="rounded-2xl border bg-background px-4 py-3">
                     <div className="text-base font-medium">Branding</div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      No MVP, branding é “personal” (avatar + @). A UI completa entra nas próximas tasks.
+                    <div className="mt-2 space-y-3 text-sm">
+                      <Switch
+                        label="Ativar branding"
+                        checked={currentBranding.enabled}
+                        onCheckedChange={(next) => applyBranding({ enabled: next })}
+                      />
+
+                      {props.creatorProfiles.length === 0 ? (
+                        <div className="rounded-xl border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
+                          Nenhum perfil de criador disponível. Crie um perfil para
+                          usar avatar + @ no template.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <label className="space-y-1 text-xs text-muted-foreground">
+                            Perfil
+                            <select
+                              className="mt-1 w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                              value={brandingProfileId ?? ""}
+                              onChange={(e) =>
+                                applyBranding({ profileId: e.target.value })
+                              }
+                            >
+                              {props.creatorProfiles.map((profile) => (
+                                <option key={profile.id} value={profile.id}>
+                                  {profile.display_name}
+                                  {profile.handle ? ` (${profile.handle})` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="space-y-1 text-xs text-muted-foreground">
+                            Mostrar em
+                            <select
+                              className="mt-1 w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                              value={currentBranding.showOn}
+                              onChange={(e) =>
+                                applyBranding({
+                                  showOn: e.target.value as BrandingConfig["showOn"]
+                                })
+                              }
+                            >
+                              <option value="all">Todos os slides</option>
+                              <option value="cover">Apenas capa</option>
+                              <option value="outro">Apenas último</option>
+                            </select>
+                          </label>
+
+                          {brandingProfile ? (
+                            <div className="flex items-center gap-3 rounded-xl border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                              <div className="h-9 w-9 overflow-hidden rounded-full border bg-muted">
+                                {brandingProfile.avatarUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    alt=""
+                                    src={brandingProfile.avatarUrl}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : null}
+                              </div>
+                              <div className="space-y-0.5">
+                                <div className="text-sm font-medium text-foreground">
+                                  {brandingProfile.display_name}
+                                </div>
+                                {brandingProfile.handle ? (
+                                  <div>{brandingProfile.handle}</div>
+                                ) : null}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+
+                      <div className="text-xs text-muted-foreground">
+                        Branding “personal” usa avatar + @ e respeita o slot do template.
+                      </div>
                     </div>
                   </div>
                 ) : null}
 
                 {showColors ? (
                   <div className="space-y-3">
-                    {/* Custom palette (always available) */}
                     <div className="rounded-xl border bg-background/70 p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          Aplicar em
+                        </div>
+                        <div className="flex rounded-lg border bg-background p-0.5 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => handlePaletteScopeChange("global")}
+                            className={`rounded-md px-2 py-1 transition ${
+                              paletteScope === "global"
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "text-muted-foreground hover:bg-secondary"
+                            }`}
+                          >
+                            Projeto
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePaletteScopeChange("slide")}
+                            className={`rounded-md px-2 py-1 transition ${
+                              paletteScope === "slide"
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "text-muted-foreground hover:bg-secondary"
+                            }`}
+                          >
+                            Slide
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-muted-foreground">
+                        Projeto aplica fundo + cores do texto. Slide aplica fundo + texto apenas
+                        no slide atual.
+                      </div>
+                    </div>
+
+                    {/* Custom palette (always available) */}
+                    <div
+                      className={`rounded-xl border bg-background/70 p-3 ${
+                        isCustomPaletteActive ? "border-primary/60 ring-1 ring-primary/30" : ""
+                      }`}
+                    >
                       <div className="flex items-center justify-between">
                         <div className="text-xs font-medium text-muted-foreground">
                           Custom
                         </div>
-                        <div className="flex items-center gap-1">
-                          <div
-                            className="h-4 w-4 rounded-md border"
-                            style={{ background: customPalette.background }}
-                            title="Background"
-                          />
-                          <div
-                            className="h-4 w-4 rounded-md border"
-                            style={{ background: customPalette.text }}
-                            title="Text"
-                          />
-                          <div
-                            className="h-4 w-4 rounded-md border"
-                            style={{ background: customPalette.accent }}
-                            title="Accent"
-                          />
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <div
+                              className="h-4 w-4 rounded-md border"
+                              style={{ background: customPalette.background }}
+                              title="Background"
+                            />
+                            <div
+                              className="h-4 w-4 rounded-md border"
+                              style={{ background: customPalette.text }}
+                              title="Text"
+                            />
+                            <div
+                              className="h-4 w-4 rounded-md border"
+                              style={{ background: customPalette.accent }}
+                              title="Accent"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleSelectCustomPalette}
+                            className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+                              isCustomPaletteActive
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border bg-muted/30 text-foreground hover:bg-muted/60"
+                            }`}
+                          >
+                            {isCustomPaletteActive ? "Ativo" : "Selecionar"}
+                          </button>
                         </div>
                       </div>
 
@@ -2818,12 +3692,16 @@ export default function StudioShell(props: Props) {
                               <input
                                 type="color"
                                 value={customPalette[key]}
-                                onChange={(e) =>
-                                  setCustomPalette((prev) => ({
-                                    ...prev,
+                                onChange={(e) => {
+                                  const nextPalette = {
+                                    ...customPalette,
                                     [key]: e.target.value
-                                  }))
-                                }
+                                  };
+                                  setCustomPalette(nextPalette);
+                                  if (isCustomPaletteActive) {
+                                    applyPaletteColors(nextPalette, null, paletteScope);
+                                  }
+                                }}
                                 className="h-9 w-9 cursor-pointer rounded-lg border bg-background p-1"
                               />
                               <input
@@ -2831,7 +3709,11 @@ export default function StudioShell(props: Props) {
                                 onChange={(e) => {
                                   const next = toHexColor(e.target.value);
                                   if (!next) return;
-                                  setCustomPalette((prev) => ({ ...prev, [key]: next }));
+                                  const nextPalette = { ...customPalette, [key]: next };
+                                  setCustomPalette(nextPalette);
+                                  if (isCustomPaletteActive) {
+                                    applyPaletteColors(nextPalette, null, paletteScope);
+                                  }
                                 }}
                                 className="h-9 w-full rounded-lg border bg-background px-2 font-mono text-xs"
                               />
@@ -2844,25 +3726,13 @@ export default function StudioShell(props: Props) {
                         <button
                           type="button"
                           onClick={() => {
-                            setPendingPaletteId(null);
-                            applyPaletteColors(customPalette, null);
-                          }}
-                          className="flex-1 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        >
-                          Aplicar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
                             startTransition(async () => {
                               const id = await saveCustomPalette();
                               if (!id) return;
-                              setPendingPaletteId(id);
-                              // Apply immediately using the custom palette colors.
-                              applyPaletteColors(customPalette, id);
+                              applyPaletteColors(customPalette, id, paletteScope);
                             });
                           }}
-                          className="rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
+                          className="flex-1 rounded-xl border bg-background px-3 py-2 text-sm hover:bg-secondary"
                         >
                           Salvar
                         </button>
@@ -2892,15 +3762,14 @@ export default function StudioShell(props: Props) {
                           ) : (
                             <div className="mt-2 grid grid-cols-4 gap-2">
                               {userPaletteOptions.map((p) => {
-                                const checked = p.id === pendingPaletteId;
+                                const checked = p.id === activePaletteKey;
                                 return (
                                   <PaletteSwatchButton
                                     key={p.id}
                                     palette={p.palette}
                                     active={checked}
                                     onClick={() => {
-                                      setPendingPaletteId(p.id);
-                                      applyPaletteColors(p.palette, p.id);
+                                      applyPaletteColors(p.palette, p.id, paletteScope);
                                     }}
                                     actions={
                                       <div className="flex gap-1">
@@ -2930,17 +3799,16 @@ export default function StudioShell(props: Props) {
                             Globais
                           </div>
                           <div className="mt-2 grid grid-cols-4 gap-2">
-                            {globalPaletteOptions.map((p) => {
-                              const checked = p.id === pendingPaletteId;
+                              {globalPaletteOptions.map((p) => {
+                                const checked = p.id === activePaletteKey;
                               return (
                                 <PaletteSwatchButton
                                   key={p.id}
                                   palette={p.palette}
                                   active={checked}
-                                  onClick={() => {
-                                    setPendingPaletteId(p.id);
-                                    applyPaletteColors(p.palette, p.id);
-                                  }}
+                                    onClick={() => {
+                                      applyPaletteColors(p.palette, p.id, paletteScope);
+                                    }}
                                 />
                               );
                             })}
@@ -2948,7 +3816,8 @@ export default function StudioShell(props: Props) {
                         </div>
 
                         <div className="text-[11px] text-muted-foreground">
-                          Aplicação instantânea (sem “salvar”). No MVP: fundo + cores do texto.
+                          Aplicação instantânea (sem “salvar”). Projeto: fundo + texto. Slide:
+                          fundo + texto do slide atual.
                         </div>
                       </div>
                     )}
@@ -2961,13 +3830,44 @@ export default function StudioShell(props: Props) {
                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                           <input
                             type="checkbox"
-                            checked={globalOverlay.enabled}
+                            checked={activeOverlay.enabled}
                             onChange={(e) => {
-                              applyOverlay({ ...globalOverlay, enabled: e.target.checked });
+                              applyOverlay(
+                                { ...activeOverlay, enabled: e.target.checked },
+                                overlayScope
+                              );
                             }}
                           />
                           Ativar
                         </label>
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between">
+                        <div className="text-[11px] text-muted-foreground">Aplicar em</div>
+                        <div className="flex rounded-lg border bg-background p-0.5 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => handleOverlayScopeChange("global")}
+                            className={`rounded-md px-2 py-1 transition ${
+                              overlayScope === "global"
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "text-muted-foreground hover:bg-secondary"
+                            }`}
+                          >
+                            Projeto
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOverlayScopeChange("slide")}
+                            className={`rounded-md px-2 py-1 transition ${
+                              overlayScope === "slide"
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "text-muted-foreground hover:bg-secondary"
+                            }`}
+                          >
+                            Slide
+                          </button>
+                        </div>
                       </div>
 
                       <div className="mt-3 grid grid-cols-2 gap-3">
@@ -2975,36 +3875,112 @@ export default function StudioShell(props: Props) {
                           <div className="text-[11px] text-muted-foreground">Cor</div>
                           <input
                             type="color"
-                            value={globalOverlay.color}
+                            value={activeOverlay.color}
                             onChange={(e) =>
-                              applyOverlay({ ...globalOverlay, color: e.target.value })
+                              applyOverlay(
+                                { ...activeOverlay, color: e.target.value },
+                                overlayScope
+                              )
                             }
                             className="h-9 w-16 cursor-pointer rounded-lg border bg-background p-1"
-                            disabled={!globalOverlay.enabled}
+                            disabled={!activeOverlay.enabled}
                           />
                         </label>
                         <label className="space-y-1">
                           <div className="text-[11px] text-muted-foreground">
-                            Opacidade: {Math.round(globalOverlay.opacity * 100)}%
+                            Opacidade: {Math.round(activeOverlay.opacity * 100)}%
                           </div>
                           <input
                             type="range"
                             min={0}
                             max={0.95}
                             step={0.05}
-                            value={globalOverlay.opacity}
+                            value={activeOverlay.opacity}
                             onChange={(e) => {
                               const n = Number(e.target.value);
                               if (!Number.isFinite(n)) return;
-                              applyOverlay({
-                                ...globalOverlay,
-                                opacity: clampNumberRange(n, 0, 0.95)
-                              });
+                              applyOverlay(
+                                {
+                                  ...activeOverlay,
+                                  opacity: clampNumberRange(n, 0, 0.95)
+                                },
+                                overlayScope
+                              );
                             }}
                             className="w-full"
-                            disabled={!globalOverlay.enabled}
+                            disabled={!activeOverlay.enabled}
                           />
                         </label>
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        <div className="space-y-1">
+                          <div className="text-[11px] text-muted-foreground">Modo</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                applyOverlay({ ...activeOverlay, mode: "solid" }, overlayScope)
+                              }
+                              disabled={!activeOverlay.enabled}
+                              className={`rounded-lg border px-2 py-1 text-xs font-medium transition ${
+                                activeOverlay.mode === "solid"
+                                  ? "border-foreground bg-foreground text-background"
+                                  : "border-border bg-muted/30 text-foreground"
+                              } ${activeOverlay.enabled ? "hover:bg-muted/60" : "cursor-not-allowed opacity-60"}`}
+                            >
+                              Sólido
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                applyOverlay(
+                                  {
+                                    ...activeOverlay,
+                                    mode: "bottom-gradient"
+                                  },
+                                  overlayScope
+                                )
+                              }
+                              disabled={!activeOverlay.enabled}
+                              className={`rounded-lg border px-2 py-1 text-xs font-medium transition ${
+                                activeOverlay.mode === "bottom-gradient"
+                                  ? "border-foreground bg-foreground text-background"
+                                  : "border-border bg-muted/30 text-foreground"
+                              } ${activeOverlay.enabled ? "hover:bg-muted/60" : "cursor-not-allowed opacity-60"}`}
+                            >
+                              Gradiente baixo
+                            </button>
+                          </div>
+                        </div>
+
+                        {activeOverlay.mode === "bottom-gradient" ? (
+                          <label className="space-y-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              Altura: {Math.round(activeOverlay.height * 100)}%
+                            </div>
+                            <input
+                              type="range"
+                              min={0.2}
+                              max={1}
+                              step={0.05}
+                              value={activeOverlay.height}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (!Number.isFinite(n)) return;
+                                applyOverlay(
+                                  {
+                                    ...activeOverlay,
+                                    height: clampNumberRange(n, 0.2, 1)
+                                  },
+                                  overlayScope
+                                );
+                              }}
+                              className="w-full"
+                              disabled={!activeOverlay.enabled}
+                            />
+                          </label>
+                        ) : null}
                       </div>
 
                       <div className="mt-2 text-[11px] text-muted-foreground">
@@ -3408,7 +4384,7 @@ export default function StudioShell(props: Props) {
                                 checked ? "border-primary ring-1 ring-primary/30" : ""
                               ].join(" ")}
                             >
-                              <div className="relative aspect-square overflow-hidden rounded-xl border bg-muted/40">
+                              <div className="relative aspect-square border bg-muted/40">
                                 {/* fake background */}
                                 <div className="absolute inset-0 bg-gradient-to-br from-muted/20 via-background to-muted/30" />
 
@@ -3579,7 +4555,7 @@ export default function StudioShell(props: Props) {
               <div className="text-xs text-muted-foreground">
                 Slide{" "}
                 <span className="rounded-full bg-background/70 px-2 py-0.5 font-mono">
-                  {selectedSlideIndex}/{Math.max(1, props.slideCount)}
+                  {selectedSlideIndex}/{Math.max(1, slideCount)}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -3641,8 +4617,16 @@ export default function StudioShell(props: Props) {
             <div
               className="relative mt-5 flex items-center justify-center transition-transform duration-200 ease-out"
               style={{ transform: `translateX(${leftShiftPx}px)` }}
+              onPointerDown={(e) => {
+                const target = e.target as Node | null;
+                if (target && canvasWrapperRef.current?.contains(target)) return;
+                canvasApiRef.current?.clearSelection();
+              }}
             >
-              <div className="relative aspect-square w-full max-w-[720px] overflow-hidden rounded-[28px] bg-background shadow-[0_30px_120px_rgba(0,0,0,0.14)]">
+              <div
+                ref={canvasWrapperRef}
+                className="relative aspect-square w-full max-w-[720px] bg-background shadow-[0_30px_120px_rgba(0,0,0,0.14)]"
+              >
                 <div className="pointer-events-none absolute left-8 top-6 z-10 text-xs text-muted-foreground">
                   Canvas (MVP)
                 </div>
@@ -3651,9 +4635,10 @@ export default function StudioShell(props: Props) {
                   slide={canvasSlide}
                   assetUrlsById={assetUrlsById}
                   renderKey={`${selectedSlideIndex}:${canvasRevision}`}
+                  layoutKey={leftShiftPx}
                   onSlideChange={onCanvasSlideChange}
                   onSelectionChange={setSelectedObjectIds}
-                  styleDefaults={{ typography: globalTypography, palette: appliedPalette }}
+                  styleDefaults={{ typography: globalTypography, palette: activePalette }}
                 />
                 {/* Locked indicator badges (AI lock) */}
                 {lockedBadges.map((b) => (
@@ -3705,13 +4690,13 @@ export default function StudioShell(props: Props) {
               </div>
             </div>
 
-            {props.slideCount > 0 ? (
+            {slideCount > 0 ? (
               <div
                 className="mt-6 flex justify-center transition-transform duration-200 ease-out"
                 style={{ transform: `translateX(${leftShiftPx}px)` }}
               >
                 <div className="flex gap-2 rounded-2xl border bg-background/80 p-2 shadow-sm backdrop-blur">
-                  {Array.from({ length: props.slideCount }, (_, i) => {
+                  {Array.from({ length: slideCount }, (_, i) => {
                     const idx = i + 1;
                     const isActive = idx === selectedSlideIndex;
                     return (

@@ -1,9 +1,22 @@
 "use client";
 
 import * as React from "react";
-import { Canvas, Group, Image, Rect, Textbox, type FabricObject } from "fabric";
+import {
+  Canvas,
+  FixedLayout,
+  Group,
+  Gradient,
+  Image,
+  LayoutManager,
+  Line,
+  Rect,
+  Textbox,
+  type FabricObject
+} from "fabric";
 
 type TextVariant = "title" | "body" | "tagline" | "cta" | "custom";
+
+type TextStyleMap = Record<string, Record<string, Record<string, unknown>>>;
 
 type SlideObjectV1 = {
   id?: string;
@@ -30,6 +43,10 @@ type SlideObjectV1 = {
   letterSpacing?: number; // px (UI-friendly); converted to Fabric `charSpacing`
   underline?: boolean;
   linethrough?: boolean;
+  stroke?: string | null;
+  strokeWidth?: number;
+  strokeLineJoin?: string;
+  styles?: TextStyleMap;
   assetId?: string | null;
   slotId?: string;
 };
@@ -39,9 +56,18 @@ export type SlideV1 = {
   width: number;
   height: number;
   objects: SlideObjectV1[];
+  paletteId?: string | null;
+  paletteData?: { background: string; text: string; accent: string };
   background?: {
     color?: string;
-    overlay?: { enabled?: boolean; opacity?: number; color?: string };
+    overlay?: {
+      enabled?: boolean;
+      opacity?: number;
+      color?: string;
+      mode?: "solid" | "bottom-gradient";
+      height?: number;
+    };
+    overlayScope?: "global" | "slide";
   } | null;
 };
 
@@ -52,6 +78,7 @@ export type FabricSlideCanvasHandle = {
   copySelection: () => boolean;
   paste: () => boolean;
   selectById: (id: string) => boolean;
+  clearSelection: () => boolean;
   exportPngDataUrl: (targetSize?: number) => string | null;
 };
 
@@ -79,6 +106,8 @@ type StyleDefaults = {
 
 const FONT_FAMILIES: Array<{ value: string; label: string }> = [
   { value: "Inter", label: "Inter" },
+  { value: "Montserrat", label: "Montserrat" },
+  { value: "Bebas Neue", label: "Bebas Neue" },
   { value: "Space Grotesk", label: "Space Grotesk" },
   { value: "Poppins", label: "Poppins" },
   { value: "Rubik", label: "Rubik" },
@@ -110,6 +139,14 @@ function strokeWidthForWeight(weight: SlideObjectV1["strokeWeight"]): number {
   if (weight === "medium") return 6;
   if (weight === "thick") return 12;
   return 0;
+}
+
+function ensureFixedLayoutManager(group: Group) {
+  const anyGroup = group as unknown as { layoutManager?: LayoutManager };
+  const current = anyGroup.layoutManager;
+  if (current?.strategy instanceof FixedLayout) return;
+  current?.dispose?.();
+  anyGroup.layoutManager = new LayoutManager(new FixedLayout());
 }
 
 type CoverCropResult = {
@@ -270,6 +307,103 @@ function normalizeFontFamilyForUi(value: string) {
   return first.replace(/^['"]/, "").replace(/['"]$/, "");
 }
 
+function isBebasNeueFamily(fontFamily: string | undefined) {
+  if (!fontFamily) return false;
+  return normalizeFontFamilyForUi(fontFamily) === "Bebas Neue";
+}
+
+function fauxBoldStrokeWidth(fontSize: number | undefined) {
+  const size = typeof fontSize === "number" && Number.isFinite(fontSize) ? fontSize : 34;
+  return Math.max(1, Math.round(size * 0.02));
+}
+
+function resolveFontWeightForFamily(fontFamily: string | undefined, weight: number) {
+  const family = normalizeFontFamilyForUi(
+    typeof fontFamily === "string" ? fontFamily : ""
+  );
+  if (family === "Bebas Neue" && weight >= 600) return 400;
+  return weight;
+}
+
+function cloneTextStyles(styles: unknown): TextStyleMap | null {
+  if (!styles || typeof styles !== "object") return null;
+  try {
+    if (typeof structuredClone === "function") {
+      return structuredClone(styles) as TextStyleMap;
+    }
+  } catch {
+    // fall through
+  }
+  try {
+    return JSON.parse(JSON.stringify(styles)) as TextStyleMap;
+  } catch {
+    return null;
+  }
+}
+
+function stripTextStyleKeys(styles: TextStyleMap, keys: string[]): TextStyleMap | null {
+  const next: TextStyleMap = {};
+  for (const [lineKey, lineStyles] of Object.entries(styles)) {
+    if (!lineStyles || typeof lineStyles !== "object") continue;
+    const nextLine: Record<string, Record<string, unknown>> = {};
+    for (const [charKey, charStyle] of Object.entries(lineStyles)) {
+      if (!charStyle || typeof charStyle !== "object") continue;
+      const nextStyle: Record<string, unknown> = { ...charStyle };
+      for (const key of keys) delete nextStyle[key];
+      if (Object.keys(nextStyle).length > 0) nextLine[charKey] = nextStyle;
+    }
+    if (Object.keys(nextLine).length > 0) next[lineKey] = nextLine;
+  }
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function normalizeBebasNeueStyles(
+  styles: TextStyleMap | null,
+  baseFill: string,
+  fontSize: number | undefined
+) {
+  if (!styles) return null;
+  const next: TextStyleMap = {};
+  const fauxWidth = fauxBoldStrokeWidth(fontSize);
+  for (const [lineKey, lineStyles] of Object.entries(styles)) {
+    if (!lineStyles || typeof lineStyles !== "object") continue;
+    const nextLine: Record<string, Record<string, unknown>> = {};
+    for (const [charKey, charStyle] of Object.entries(lineStyles)) {
+      if (!charStyle || typeof charStyle !== "object") continue;
+      const nextStyle: Record<string, unknown> = { ...charStyle };
+      const weight = typeof nextStyle.fontWeight === "number" ? nextStyle.fontWeight : null;
+      const fill = typeof nextStyle.fill === "string" ? nextStyle.fill : baseFill;
+      if (weight !== null && weight >= 600) {
+        nextStyle.fontWeight = 400;
+        nextStyle.stroke = fill;
+        nextStyle.strokeWidth = fauxWidth;
+        nextStyle.strokeLineJoin = "round";
+      }
+      if (Object.keys(nextStyle).length > 0) nextLine[charKey] = nextStyle;
+    }
+    if (Object.keys(nextLine).length > 0) next[lineKey] = nextLine;
+  }
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function hexToRgb(value: string): [number, number, number] | null {
+  const raw = value.trim().replace("#", "");
+  if (raw.length !== 3 && raw.length !== 6) return null;
+  const expanded =
+    raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+  const num = Number.parseInt(expanded, 16);
+  if (!Number.isFinite(num)) return null;
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+function getReadableStroke(fill: string) {
+  const rgb = hexToRgb(fill);
+  if (!rgb) return "#000000";
+  const [r, g, b] = rgb;
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.6 ? "#000000" : "#ffffff";
+}
+
 function createId(prefix = "obj") {
   const rand =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -311,6 +445,7 @@ type Props = {
   assetUrlsById?: Record<string, string>;
   className?: string;
   renderKey: string | number;
+  layoutKey?: string | number;
   onSlideChange: (next: SlideV1) => void;
   onSelectionChange?: (ids: string[]) => void;
   styleDefaults?: StyleDefaults;
@@ -323,6 +458,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       assetUrlsById,
       className,
       renderKey,
+      layoutKey,
       onSlideChange,
       onSelectionChange,
       styleDefaults
@@ -344,6 +480,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     null
   );
   const accentColor = styleDefaults?.palette?.accent ?? "#111827";
+  const toolbarAccent = styleDefaults?.palette?.accent ?? "#7c3aed";
   const onSelectionChangeRef = React.useRef<Props["onSelectionChange"]>(null);
   const [textToolbar, setTextToolbar] = React.useState<{
     left: number;
@@ -352,12 +489,16 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     variant: TextVariant;
     fontFamily: string;
     fontSize: number;
+    lineHeight: number;
+    letterSpacing: number;
     fill: string;
     fontWeight: number;
     fontStyle: "normal" | "italic";
     underline: boolean;
     linethrough: boolean;
     textAlign: "left" | "center" | "right" | "justify";
+    stroke: string | null;
+    strokeWidth: number;
   } | null>(null);
   const [imageToolbar, setImageToolbar] = React.useState<{
     left: number;
@@ -366,33 +507,58 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     cornerRounding: number;
     strokeWeight: NonNullable<SlideObjectV1["strokeWeight"]>;
     strokeColor: string;
-    cropMode: boolean;
   } | null>(null);
+  const textToolbarRef = React.useRef<HTMLDivElement | null>(null);
+  const imageToolbarRef = React.useRef<HTMLDivElement | null>(null);
+  const textToolbarSizeRef = React.useRef({ width: 660, height: 44 });
+  const imageToolbarSizeRef = React.useRef({ width: 320, height: 40 });
+  const imageToolbarVisibleRef = React.useRef(false);
+  const textSelectionRef = React.useRef<
+    Record<string, { start: number; end: number; at: number; textLength: number }>
+  >({});
   const toolbarRafRef = React.useRef<number | null>(null);
   const [fontSizeDraft, setFontSizeDraft] = React.useState<string>("");
   const [fontSizeFocused, setFontSizeFocused] = React.useState(false);
+  const [lineHeightDraft, setLineHeightDraft] = React.useState<string>("");
+  const [lineHeightFocused, setLineHeightFocused] = React.useState(false);
+  const [letterSpacingDraft, setLetterSpacingDraft] = React.useState<string>("");
+  const [letterSpacingFocused, setLetterSpacingFocused] = React.useState(false);
   const [cornerRoundingDraft, setCornerRoundingDraft] = React.useState<string>("");
   const [cornerRoundingFocused, setCornerRoundingFocused] = React.useState(false);
-  const [cropModeId, setCropModeId] = React.useState<string | null>(null);
-  const cropModeRef = React.useRef<string | null>(null);
-  const cropDragRef = React.useRef<{
-    id: string;
-    startX: number;
-    startY: number;
-    startOffsetX: number;
-    startOffsetY: number;
-  } | null>(null);
-
-  React.useEffect(() => {
-    cropModeRef.current = cropModeId;
-  }, [cropModeId]);
-
   React.useEffect(() => {
     // If the active image changes (or the toolbar disappears), reset transient
     // draft/focus state so sliders don't "stick" across different images.
     setCornerRoundingFocused(false);
     setCornerRoundingDraft("");
   }, [imageToolbar?.id]);
+
+  React.useEffect(() => {
+    imageToolbarVisibleRef.current = Boolean(imageToolbar);
+  }, [imageToolbar]);
+
+  React.useEffect(() => {
+    if (!textToolbar) return;
+    if (fontSizeFocused) return;
+    setFontSizeDraft(String(Math.round(textToolbar.fontSize)));
+  }, [fontSizeFocused, textToolbar?.fontSize]);
+
+  React.useEffect(() => {
+    if (!textToolbar) return;
+    if (lineHeightFocused) return;
+    setLineHeightDraft(String(textToolbar.lineHeight.toFixed(2)));
+  }, [lineHeightFocused, textToolbar?.lineHeight]);
+
+  React.useEffect(() => {
+    if (!textToolbar) return;
+    if (letterSpacingFocused) return;
+    setLetterSpacingDraft(String(textToolbar.letterSpacing));
+  }, [letterSpacingFocused, textToolbar?.letterSpacing]);
+
+  React.useEffect(() => {
+    if (!imageToolbar) return;
+    if (cornerRoundingFocused) return;
+    setCornerRoundingDraft(String(Math.round(imageToolbar.cornerRounding)));
+  }, [cornerRoundingFocused, imageToolbar?.cornerRounding]);
 
   React.useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange ?? null;
@@ -470,8 +636,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
     type CoordPoint = { x: number; y: number };
     type OCoords = { tl: CoordPoint; tr: CoordPoint; br: CoordPoint; bl: CoordPoint };
-    const coords = (active as unknown as { oCoords?: OCoords }).oCoords;
+    let coords = (active as unknown as { oCoords?: OCoords }).oCoords;
     if (!coords || !coords.tl) {
+      (active as unknown as { setCoords?: () => void }).setCoords?.();
+      coords = (active as unknown as { oCoords?: OCoords }).oCoords;
+    }
+    if (!coords || !coords.tl) {
+      if ((active as unknown as { isEditing?: boolean }).isEditing) return;
       setTextToolbar(null);
       return;
     }
@@ -496,23 +667,104 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const cssX = minX / ratio;
     const cssY = minY / ratio;
 
-    const box = container.getBoundingClientRect();
-    const maxLeft = Math.max(8, box.width - 360);
-    const left = Math.max(8, Math.min(maxLeft, cssX));
-    const top = Math.max(8, cssY - 54);
+    const slideW = clampNumber(slideRef.current.width, 1080);
+    const slideH = clampNumber(slideRef.current.height, 1080);
+    const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+    const scaleX = typeof vpt[0] === "number" && Number.isFinite(vpt[0]) ? vpt[0] : 1;
+    const scaleY = typeof vpt[3] === "number" && Number.isFinite(vpt[3]) ? vpt[3] : scaleX;
+    const tx = typeof vpt[4] === "number" && Number.isFinite(vpt[4]) ? vpt[4] : 0;
+    const ty = typeof vpt[5] === "number" && Number.isFinite(vpt[5]) ? vpt[5] : 0;
+    const slideLeft = tx / ratio;
+    const slideTop = ty / ratio;
+    const slideWidth = (slideW * scaleX) / ratio;
+    const slideHeight = (slideH * scaleY) / ratio;
+    const toolbarWidth = textToolbarSizeRef.current.width;
+    const toolbarHeight = textToolbarSizeRef.current.height;
+    const minLeft = slideLeft + 8;
+    const maxLeft = slideLeft + slideWidth - toolbarWidth - 8;
+    const left = Math.max(minLeft, Math.min(maxLeft, cssX));
+    const preferTop = cssY - toolbarHeight - 8;
+    const minTop = slideTop + 8;
+    const maxTop = slideTop + slideHeight - toolbarHeight - 8;
+    let top = preferTop < minTop ? cssY + 8 : preferTop;
+    top = Math.max(minTop, Math.min(maxTop, top));
 
-      const any = active as unknown as {
-        fontFamily?: unknown;
-        fontSize?: unknown;
-        fill?: unknown;
-        fontWeight?: unknown;
-        fontStyle?: unknown;
-        lineHeight?: unknown;
-        charSpacing?: unknown;
-        underline?: unknown;
-        linethrough?: unknown;
-        textAlign?: unknown;
-      };
+    const any = active as unknown as {
+      fontFamily?: unknown;
+      fontSize?: unknown;
+      fill?: unknown;
+      fontWeight?: unknown;
+      fontStyle?: unknown;
+      lineHeight?: unknown;
+      charSpacing?: unknown;
+      underline?: unknown;
+      linethrough?: unknown;
+      textAlign?: unknown;
+      stroke?: unknown;
+      strokeWidth?: unknown;
+    };
+
+    const activeText = active as unknown as {
+      isEditing?: boolean;
+      selectionStart?: number;
+      selectionEnd?: number;
+      text?: string;
+      getSelectionStyles?: (start?: number, end?: number) => Array<Record<string, unknown>>;
+    };
+
+    const isEditing = Boolean(activeText.isEditing);
+    const selectionStart =
+      typeof activeText.selectionStart === "number" ? activeText.selectionStart : 0;
+    const selectionEnd =
+      typeof activeText.selectionEnd === "number"
+        ? activeText.selectionEnd
+        : activeText.text?.length ?? 0;
+    const textLength = typeof activeText.text === "string" ? activeText.text.length : 0;
+    const lastSelection = textSelectionRef.current[id];
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const recentSelection =
+      lastSelection && now - lastSelection.at < 1500 ? lastSelection : null;
+    const hasLiveSelection = isEditing && selectionEnd > selectionStart;
+    const selectionRange = hasLiveSelection
+      ? { start: selectionStart, end: selectionEnd }
+      : recentSelection &&
+          recentSelection.end > recentSelection.start &&
+          recentSelection.textLength === textLength
+        ? { start: recentSelection.start, end: recentSelection.end }
+        : null;
+    const selectionIsFull =
+      selectionRange &&
+      selectionRange.start <= 0 &&
+      selectionRange.end >= textLength &&
+      textLength > 0;
+
+    const selectionStyles =
+      selectionRange && !selectionIsFull && typeof activeText.getSelectionStyles === "function"
+        ? activeText.getSelectionStyles(selectionRange.start, selectionRange.end)
+        : null;
+
+    const resolveSelectionValue = <T,>(key: string, fallback: T): T => {
+      if (!selectionStyles || selectionStyles.length === 0) return fallback;
+      const values = selectionStyles
+        .map((style) => (style as Record<string, unknown>)[key])
+        .filter((value) => value !== undefined);
+      if (values.length === 0) return fallback;
+      const first = values[0];
+      const allSame = values.every((value) => value === first);
+      return allSame ? (first as T) : fallback;
+    };
+
+    const selectionFontFamily = resolveSelectionValue("fontFamily", any.fontFamily);
+    const selectionFontSize = resolveSelectionValue("fontSize", any.fontSize);
+    const selectionFontWeight = resolveSelectionValue("fontWeight", any.fontWeight);
+    const selectionFontStyle = resolveSelectionValue("fontStyle", any.fontStyle);
+    const selectionLineHeight = resolveSelectionValue("lineHeight", any.lineHeight);
+    const selectionCharSpacing = resolveSelectionValue("charSpacing", any.charSpacing);
+    const selectionFill = resolveSelectionValue("fill", any.fill);
+    const selectionUnderline = resolveSelectionValue("underline", any.underline);
+    const selectionLinethrough = resolveSelectionValue("linethrough", any.linethrough);
+    const selectionStroke = resolveSelectionValue("stroke", any.stroke);
+    const selectionStrokeWidth = resolveSelectionValue("strokeWidth", any.strokeWidth);
 
     const variant =
       getObjectVariant(active) ??
@@ -524,31 +776,47 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             ? "tagline"
             : "body");
 
+    const resolvedFamily =
+      typeof selectionFontFamily === "string"
+        ? normalizeFontFamilyForUi(selectionFontFamily)
+        : "Inter";
+    const fauxBold =
+      isBebasNeueFamily(resolvedFamily) &&
+      typeof selectionStrokeWidth === "number" &&
+      selectionStrokeWidth > 0 &&
+      typeof selectionStroke === "string" &&
+      typeof selectionFill === "string" &&
+      selectionStroke === selectionFill;
+
     setTextToolbar({
       id,
       left,
       top,
       variant,
-      fontFamily:
-        typeof any.fontFamily === "string"
-          ? normalizeFontFamilyForUi(any.fontFamily)
-          : "Inter",
-      fontSize: typeof any.fontSize === "number" ? any.fontSize : 34,
-      fill: typeof any.fill === "string" ? any.fill : "#111827",
-      fontWeight: typeof any.fontWeight === "number" ? any.fontWeight : 600,
-      fontStyle: any.fontStyle === "italic" ? "italic" : "normal",
-      underline: Boolean(any.underline),
-      linethrough: Boolean(any.linethrough),
+      fontFamily: resolvedFamily,
+      fontSize: typeof selectionFontSize === "number" ? selectionFontSize : 34,
+      lineHeight: typeof selectionLineHeight === "number" ? selectionLineHeight : 1.2,
+      letterSpacing:
+        typeof selectionCharSpacing === "number" && typeof selectionFontSize === "number"
+          ? fromFabricCharSpacing(selectionCharSpacing, selectionFontSize)
+          : 0,
+      fill: typeof selectionFill === "string" ? selectionFill : "#111827",
+      fontWeight: fauxBold
+        ? 700
+        : typeof selectionFontWeight === "number"
+          ? selectionFontWeight
+          : 600,
+      fontStyle: selectionFontStyle === "italic" ? "italic" : "normal",
+      underline: Boolean(selectionUnderline),
+      linethrough: Boolean(selectionLinethrough),
       textAlign:
         any.textAlign === "center" || any.textAlign === "right" || any.textAlign === "justify"
           ? any.textAlign
-          : "left"
+          : "left",
+      stroke: typeof selectionStroke === "string" ? selectionStroke : null,
+      strokeWidth: typeof selectionStrokeWidth === "number" ? selectionStrokeWidth : 0
     });
-
-    if (!fontSizeFocused) {
-      setFontSizeDraft(String(Math.round(typeof any.fontSize === "number" ? any.fontSize : 34)));
-    }
-  }, [fontSizeFocused]);
+  }, []);
 
   const updateImageToolbar = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -601,10 +869,27 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const cssX = minX / ratio;
     const cssY = minY / ratio;
 
-    const box = container.getBoundingClientRect();
-    const maxLeft = Math.max(8, box.width - 380);
-    const left = Math.max(8, Math.min(maxLeft, cssX));
-    const top = Math.max(8, cssY - 54);
+    const slideW = clampNumber(slideRef.current.width, 1080);
+    const slideH = clampNumber(slideRef.current.height, 1080);
+    const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+    const scaleX = typeof vpt[0] === "number" && Number.isFinite(vpt[0]) ? vpt[0] : 1;
+    const scaleY = typeof vpt[3] === "number" && Number.isFinite(vpt[3]) ? vpt[3] : scaleX;
+    const tx = typeof vpt[4] === "number" && Number.isFinite(vpt[4]) ? vpt[4] : 0;
+    const ty = typeof vpt[5] === "number" && Number.isFinite(vpt[5]) ? vpt[5] : 0;
+    const slideLeft = tx / ratio;
+    const slideTop = ty / ratio;
+    const slideWidth = (slideW * scaleX) / ratio;
+    const slideHeight = (slideH * scaleY) / ratio;
+    const toolbarWidth = imageToolbarSizeRef.current.width;
+    const toolbarHeight = imageToolbarSizeRef.current.height;
+    const minLeft = slideLeft + 8;
+    const maxLeft = slideLeft + slideWidth - toolbarWidth - 8;
+    const left = Math.max(minLeft, Math.min(maxLeft, cssX));
+    const preferTop = cssY - toolbarHeight - 8;
+    const minTop = slideTop + 8;
+    const maxTop = slideTop + slideHeight - toolbarHeight - 8;
+    let top = preferTop < minTop ? cssY + 8 : preferTop;
+    top = Math.max(minTop, Math.min(maxTop, top));
 
     const cornerRounding = clampNumberRange(raw.cornerRounding, 0, 100, 18);
     const strokeWeight =
@@ -614,7 +899,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const strokeColor =
       typeof raw.strokeColor === "string"
         ? raw.strokeColor
-        : styleDefaults?.palette?.accent ?? "#7c3aed";
+        : toolbarAccent;
 
     setImageToolbar({
       id,
@@ -622,23 +907,52 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       top,
       cornerRounding,
       strokeWeight,
-      strokeColor,
-      cropMode: cropModeRef.current === id
+      strokeColor
     });
+  }, [toolbarAccent]);
 
-    if (!cornerRoundingFocused) {
-      setCornerRoundingDraft(String(Math.round(cornerRounding)));
-    }
-  }, [cornerRoundingFocused]);
+  const updateTextToolbarRef = React.useRef<() => void>(() => {});
+  const updateImageToolbarRef = React.useRef<() => void>(() => {});
+
+  React.useEffect(() => {
+    updateTextToolbarRef.current = updateTextToolbar;
+  }, [updateTextToolbar]);
+
+  React.useEffect(() => {
+    updateImageToolbarRef.current = updateImageToolbar;
+  }, [updateImageToolbar]);
 
   const scheduleToolbarUpdate = React.useCallback(() => {
     if (toolbarRafRef.current) cancelAnimationFrame(toolbarRafRef.current);
     toolbarRafRef.current = requestAnimationFrame(() => {
       toolbarRafRef.current = null;
-      updateTextToolbar();
-      updateImageToolbar();
+      updateTextToolbarRef.current();
+      updateImageToolbarRef.current();
     });
-  }, [updateImageToolbar, updateTextToolbar]);
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (!textToolbarRef.current) return;
+    const rect = textToolbarRef.current.getBoundingClientRect();
+    if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
+    if (rect.width <= 0 || rect.height <= 0) return;
+    textToolbarSizeRef.current = { width: rect.width, height: rect.height };
+    scheduleToolbarUpdate();
+  }, [textToolbar?.id, textToolbar?.variant, scheduleToolbarUpdate]);
+
+  React.useLayoutEffect(() => {
+    if (!imageToolbarRef.current) return;
+    const rect = imageToolbarRef.current.getBoundingClientRect();
+    if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
+    if (rect.width <= 0 || rect.height <= 0) return;
+    imageToolbarSizeRef.current = { width: rect.width, height: rect.height };
+    scheduleToolbarUpdate();
+  }, [imageToolbar?.id, imageToolbar?.strokeWeight, imageToolbar?.cornerRounding, scheduleToolbarUpdate]);
+
+  React.useEffect(() => {
+    if (!imageToolbarVisibleRef.current) return;
+    scheduleToolbarUpdate();
+  }, [scheduleToolbarUpdate, toolbarAccent]);
 
   const getActiveImageGroup = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -650,6 +964,24 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
   const syncImageGroupAppearance = React.useCallback(
     (group: Group, raw: SlideObjectV1, meta: ImageMeta) => {
+      // Prevent FitContentLayout from re-laying out children on every `.set()` call.
+      // This was causing images to drift and bounding boxes to desync.
+      ensureFixedLayoutManager(group);
+
+      // Defensive: ensure appearance updates never "jump" the group around.
+      const prevLeft = typeof group.left === "number" && Number.isFinite(group.left) ? group.left : 0;
+      const prevTop = typeof group.top === "number" && Number.isFinite(group.top) ? group.top : 0;
+      const prevScaleX =
+        typeof (group as unknown as { scaleX?: unknown }).scaleX === "number" &&
+        Number.isFinite((group as unknown as { scaleX: number }).scaleX)
+          ? (group as unknown as { scaleX: number }).scaleX
+          : 1;
+      const prevScaleY =
+        typeof (group as unknown as { scaleY?: unknown }).scaleY === "number" &&
+        Number.isFinite((group as unknown as { scaleY: number }).scaleY)
+          ? (group as unknown as { scaleY: number }).scaleY
+          : 1;
+
       const iw = clampNumber(meta.naturalWidth, 1);
       const ih = clampNumber(meta.naturalHeight, 1);
       const frameW = clampNumber(raw.width, 400);
@@ -657,7 +989,6 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       const offsetX = clampNumber(raw.contentOffsetX, 0);
       const offsetY = clampNumber(raw.contentOffsetY, 0);
-      const crop = computeCoverCrop(iw, ih, frameW, frameH, offsetX, offsetY);
 
       const cornerValue = clampNumberRange(raw.cornerRounding, 0, 100, 18);
       const radiusPx = (Math.min(frameW, frameH) / 2) * (cornerValue / 100);
@@ -669,18 +1000,58 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const strokeWidth = strokeWidthForWeight(strokeWeight);
       const strokeColor = typeof raw.strokeColor === "string" ? raw.strokeColor : accentColor;
 
+      const contentW = Math.max(1, frameW);
+      const contentH = Math.max(1, frameH);
+      const crop = computeCoverCrop(iw, ih, contentW, contentH, offsetX, offsetY);
+
       const objects = group.getObjects() as unknown as FabricObject[];
-      const innerGroup = objects.find(
-        (o) => (o as unknown as { dojogramRole?: unknown }).dojogramRole === "imageInner"
+      const contentGroup = objects.find(
+        (o) => (o as unknown as { dojogramRole?: unknown }).dojogramRole === "content"
       ) as Group | undefined;
-      const innerObjects = innerGroup ? ((innerGroup.getObjects() as unknown) as FabricObject[]) : [];
-      const imgObj = innerObjects.find((o) => (o as unknown as { type?: unknown }).type === "image") as
+      if (contentGroup) ensureFixedLayoutManager(contentGroup);
+      // Older builds used `group.clipPath` for rounding; clear it so stroke
+      // can extend outside the image frame without being clipped.
+      if (contentGroup && (group as unknown as { clipPath?: unknown }).clipPath) {
+        (group as unknown as { clipPath?: unknown }).clipPath = undefined;
+        (group as unknown as { dirty?: boolean }).dirty = true;
+      }
+
+      if (contentGroup) {
+        const localLeft = -frameW / 2;
+        const localTop = -frameH / 2;
+        contentGroup.set({
+          left: localLeft,
+          top: localTop,
+          originX: "left",
+          originY: "top",
+          width: contentW,
+          height: contentH,
+          scaleX: 1,
+          scaleY: 1,
+          objectCaching: false,
+          selectable: false,
+          evented: false
+        });
+        contentGroup.setCoords();
+        (contentGroup as unknown as { dirty?: boolean }).dirty = true;
+      }
+
+      const contentObjects = contentGroup
+        ? ((contentGroup.getObjects() as unknown) as FabricObject[])
+        : objects;
+
+      const imgObj = contentObjects.find((o) => (o as unknown as { type?: unknown }).type === "image") as
         | Image
         | undefined;
       if (imgObj) {
+        // IMPORTANT: Fabric groups use a center-based local coordinate system.
+        // With `group.originX/Y = left/top`, the group's top-left is at
+        // (-frameW/2, -frameH/2) in local coordinates.
+        const localLeft = -contentW / 2;
+        const localTop = -contentH / 2;
         imgObj.set({
-          left: 0,
-          top: 0,
+          left: localLeft,
+          top: localTop,
           originX: "left",
           originY: "top",
           cropX: crop.cropX,
@@ -689,56 +1060,79 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           height: crop.cropH,
           scaleX: crop.scale,
           scaleY: crop.scale,
+          objectCaching: false,
           selectable: false,
           evented: false
         });
+        (imgObj as unknown as { dirty?: boolean }).dirty = true;
       }
 
-      if (innerGroup) {
-        const clip = innerGroup.clipPath as Rect | undefined;
-        if (clip) {
-          clip.set({
-            left: 0,
-            top: 0,
-            width: frameW,
-            height: frameH,
-            rx: radiusPx,
-            ry: radiusPx
-          });
-        }
-
-        // Recompute bounds for accurate selection outlines after updates.
-        (innerGroup as unknown as { _calcBounds?: () => void })._calcBounds?.();
-        (innerGroup as unknown as { _updateObjectsCoords?: () => void })._updateObjectsCoords?.();
+      const clipOwner = (contentGroup ?? group) as unknown as { clipPath?: unknown };
+      const groupClip = clipOwner.clipPath as Rect | undefined;
+      if (groupClip) {
+        const localLeft = -contentW / 2;
+        const localTop = -contentH / 2;
+        groupClip.set({
+          left: localLeft,
+          top: localTop,
+          originX: "left",
+          originY: "top",
+          width: contentW,
+          height: contentH,
+          rx: radiusPx,
+          ry: radiusPx,
+          absolutePositioned: false
+        });
+        (groupClip as unknown as { objectCaching?: boolean }).objectCaching = false;
+        (groupClip as unknown as { setCoords?: () => void }).setCoords?.();
+        (groupClip as unknown as { dirty?: boolean }).dirty = true;
       }
 
       const strokeRect = objects.find(
         (o) => (o as unknown as { dojogramRole?: unknown }).dojogramRole === "stroke"
       ) as Rect | undefined;
       if (strokeRect) {
+        // Stroke is drawn INSIDE the frame so it stays aligned with the
+        // selection/bounding box while the image remains full-bleed.
+        const localLeft = -frameW / 2;
+        const localTop = -frameH / 2;
         strokeRect.set({
-          left: 0,
-          top: 0,
+          left: localLeft,
+          top: localTop,
           originX: "left",
           originY: "top",
-          width: Math.max(1, frameW),
-          height: Math.max(1, frameH),
-          rx: Math.max(0, radiusPx),
-          ry: Math.max(0, radiusPx),
+          width: frameW,
+          height: frameH,
+          rx: radiusPx,
+          ry: radiusPx,
           stroke: strokeColor,
           strokeWidth,
           opacity: strokeWidth > 0 ? 1 : 0,
           fill: "rgba(0,0,0,0)",
+          objectCaching: false,
           selectable: false,
           evented: false,
-          strokeUniform: true
+          strokeUniform: true,
+          strokeLineJoin: "round"
         });
+        if (strokeRect.clipPath) strokeRect.clipPath = undefined;
+        strokeRect.setCoords();
+        (strokeRect as unknown as { dirty?: boolean }).dirty = true;
       }
 
-      // Recompute bounds for accurate selection outlines after updates.
-      innerGroup?.triggerLayout();
-      group.triggerLayout();
+      // Ensure the group's width/height matches the frame so bounds/selection
+      // stay aligned with the visible image.
+      (group as unknown as { objectCaching?: boolean }).objectCaching = false;
+      group.set({
+        left: prevLeft,
+        top: prevTop,
+        scaleX: prevScaleX,
+        scaleY: prevScaleY,
+        width: frameW,
+        height: frameH
+      });
       group.setCoords();
+      (group as unknown as { dirty?: boolean }).dirty = true;
       group.canvas?.requestRenderAll();
       return { normalizedOffsetX: crop.normalizedOffsetX, normalizedOffsetY: crop.normalizedOffsetY };
     },
@@ -808,57 +1202,256 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         "fontSize" in patch ||
         "fontWeight" in patch ||
         "fontStyle" in patch ||
-        "underline" in patch ||
-        "linethrough" in patch ||
         "lineHeight" in patch ||
         "letterSpacing" in patch;
 
       if (typeof patch.variant === "string") setObjectVariant(active, patch.variant);
 
-      if (typeof patch.fontFamily === "string") {
-        (active as unknown as { fontFamily?: string }).fontFamily = toFontStack(
-          patch.fontFamily
-        );
+      const isEditing = Boolean((active as unknown as { isEditing?: boolean }).isEditing);
+      const activeText = active as unknown as {
+        fontFamily?: string;
+        fontSize?: number;
+        fill?: string;
+        fontWeight?: number;
+        fontStyle?: "normal" | "italic";
+        lineHeight?: number;
+        charSpacing?: number;
+        underline?: boolean;
+        linethrough?: boolean;
+        textAlign?: SlideObjectV1["textAlign"];
+        styles?: Record<string, unknown>;
+        selectionStart?: number;
+        selectionEnd?: number;
+        setSelectionStyles?: (
+          styles: Record<string, unknown>,
+          start?: number,
+          end?: number
+        ) => void;
+        initDimensions?: () => void;
+        setCoords?: () => void;
+        dirty?: boolean;
+        text?: string;
+      };
+
+      const prevWidth = typeof active.width === "number" ? active.width : undefined;
+      const prevLeft = typeof active.left === "number" ? active.left : undefined;
+      const prevTop = typeof active.top === "number" ? active.top : undefined;
+      const prevAlign = activeText.textAlign;
+      const preserveWidth = prevAlign !== "center" && prevAlign !== "right";
+      const anchorX =
+        typeof prevLeft === "number" && typeof prevWidth === "number"
+          ? prevAlign === "center"
+            ? prevLeft + prevWidth / 2
+            : prevAlign === "right"
+              ? prevLeft + prevWidth
+              : prevLeft
+          : null;
+
+      const selectionStart =
+        typeof activeText.selectionStart === "number" ? activeText.selectionStart : 0;
+      const selectionEnd =
+        typeof activeText.selectionEnd === "number"
+          ? activeText.selectionEnd
+          : activeText.text?.length ?? 0;
+      const textLength = typeof activeText.text === "string" ? activeText.text.length : 0;
+      const lastSelection = textSelectionRef.current[id];
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const recentSelection =
+        lastSelection && now - lastSelection.at < 1500 ? lastSelection : null;
+      const hasLiveSelection = isEditing && selectionEnd > selectionStart;
+      const selectionRange = hasLiveSelection
+        ? { start: selectionStart, end: selectionEnd }
+        : recentSelection &&
+            recentSelection.end > recentSelection.start &&
+            recentSelection.textLength === textLength
+          ? { start: recentSelection.start, end: recentSelection.end }
+          : null;
+      const selectionIsFull =
+        selectionRange &&
+        selectionRange.start <= 0 &&
+        selectionRange.end >= textLength &&
+        textLength > 0;
+      const hasSelection = Boolean(selectionRange && !selectionIsFull);
+      const selectionAnchor =
+        isEditing &&
+        typeof activeText.selectionStart === "number" &&
+        typeof activeText.selectionEnd === "number"
+          ? { start: activeText.selectionStart, end: activeText.selectionEnd }
+          : null;
+      const resolvedFontFamily =
+        typeof patch.fontFamily === "string" ? patch.fontFamily : activeText.fontFamily;
+      const wantsBold = typeof patch.fontWeight === "number" && patch.fontWeight >= 600;
+      const wantsNormal = typeof patch.fontWeight === "number" && patch.fontWeight < 600;
+      const isBebasNeue = isBebasNeueFamily(resolvedFontFamily);
+      const resolvedFontWeight =
+        typeof patch.fontWeight === "number"
+          ? resolveFontWeightForFamily(resolvedFontFamily, patch.fontWeight)
+          : undefined;
+      const fauxBoldWidth = fauxBoldStrokeWidth(
+        typeof patch.fontSize === "number" ? patch.fontSize : activeText.fontSize
+      );
+      const fauxBoldFill =
+        typeof patch.fill === "string"
+          ? patch.fill
+          : typeof activeText.fill === "string"
+            ? activeText.fill
+            : "#111827";
+
+      if (!hasSelection && typeof patch.fontFamily === "string") {
+        activeText.fontFamily = toFontStack(patch.fontFamily);
       }
-      if (typeof patch.fontSize === "number") {
-        (active as unknown as { fontSize?: number }).fontSize = patch.fontSize;
+      if (!hasSelection && typeof patch.fontSize === "number") {
+        activeText.fontSize = patch.fontSize;
       }
-      if (typeof patch.fill === "string") {
-        (active as unknown as { fill?: string }).fill = patch.fill;
+      if (!hasSelection && typeof patch.fill === "string") {
+        activeText.fill = patch.fill;
       }
-      if (typeof patch.fontWeight === "number") {
-        (active as unknown as { fontWeight?: number }).fontWeight = patch.fontWeight;
+      if (!hasSelection && typeof resolvedFontWeight === "number") {
+        activeText.fontWeight = resolvedFontWeight;
       }
-      if (typeof patch.fontStyle === "string") {
-        (active as unknown as { fontStyle?: "normal" | "italic" }).fontStyle = patch.fontStyle;
+      if (!hasSelection && typeof patch.fontStyle === "string") {
+        activeText.fontStyle = patch.fontStyle;
       }
-      if (typeof patch.lineHeight === "number") {
-        (active as unknown as { lineHeight?: number }).lineHeight = patch.lineHeight;
+      if (!hasSelection && typeof patch.lineHeight === "number") {
+        activeText.lineHeight = patch.lineHeight;
       }
-      if (typeof patch.letterSpacing === "number") {
-        const size =
-          typeof (active as unknown as { fontSize?: unknown }).fontSize === "number"
-            ? (active as unknown as { fontSize: number }).fontSize
-            : 34;
-        (active as unknown as { charSpacing?: number }).charSpacing = toFabricCharSpacing(
-          patch.letterSpacing,
-          size
-        );
+      if (!hasSelection && typeof patch.letterSpacing === "number") {
+        const size = typeof activeText.fontSize === "number" ? activeText.fontSize : 34;
+        activeText.charSpacing = toFabricCharSpacing(patch.letterSpacing, size);
       }
-      if (typeof patch.underline === "boolean") {
-        (active as unknown as { underline?: boolean }).underline = patch.underline;
+      if (!hasSelection && typeof patch.underline === "boolean") {
+        activeText.underline = patch.underline;
       }
-      if (typeof patch.linethrough === "boolean") {
-        (active as unknown as { linethrough?: boolean }).linethrough = patch.linethrough;
+      if (!hasSelection && typeof patch.linethrough === "boolean") {
+        activeText.linethrough = patch.linethrough;
       }
       if (typeof patch.textAlign === "string") {
-        (active as unknown as { textAlign?: SlideObjectV1["textAlign"] }).textAlign = patch.textAlign;
+        activeText.textAlign = patch.textAlign;
+      }
+      if (!hasSelection && (typeof patch.stroke === "string" || patch.stroke === null)) {
+        (active as unknown as { stroke?: string }).stroke = patch.stroke ?? undefined;
+      }
+      if (!hasSelection && typeof patch.strokeWidth === "number") {
+        (active as unknown as { strokeWidth?: number }).strokeWidth = patch.strokeWidth;
+      }
+      if (!hasSelection && typeof patch.strokeLineJoin === "string") {
+        (active as unknown as { strokeLineJoin?: string }).strokeLineJoin = patch.strokeLineJoin;
+      }
+      if (!hasSelection && isBebasNeue && wantsBold) {
+        (active as unknown as { stroke?: string }).stroke = fauxBoldFill;
+        (active as unknown as { strokeWidth?: number }).strokeWidth = fauxBoldWidth;
+        (active as unknown as { strokeLineJoin?: string }).strokeLineJoin = "round";
+      }
+      if (!hasSelection && isBebasNeue && wantsNormal) {
+        const currentStroke = (active as unknown as { stroke?: unknown }).stroke;
+        if (currentStroke === fauxBoldFill) {
+          (active as unknown as { stroke?: string }).stroke = undefined;
+          (active as unknown as { strokeWidth?: number }).strokeWidth = 0;
+        }
       }
 
-      if (affectsLayout) {
-        (active as unknown as { initDimensions?: () => void }).initDimensions?.();
+      if (hasSelection && typeof activeText.setSelectionStyles === "function" && selectionRange) {
+        const start = selectionRange.start;
+        const end = selectionRange.end;
+        const selectionStyles: Record<string, unknown> = {};
+        if (typeof patch.fill === "string") selectionStyles.fill = patch.fill;
+        if (typeof resolvedFontWeight === "number")
+          selectionStyles.fontWeight = resolvedFontWeight;
+        if (typeof patch.fontStyle === "string") selectionStyles.fontStyle = patch.fontStyle;
+        if (typeof patch.underline === "boolean") selectionStyles.underline = patch.underline;
+        if (typeof patch.linethrough === "boolean")
+          selectionStyles.linethrough = patch.linethrough;
+        if (typeof patch.fontFamily === "string")
+          selectionStyles.fontFamily = toFontStack(patch.fontFamily);
+        if (typeof patch.fontSize === "number") selectionStyles.fontSize = patch.fontSize;
+        if (typeof patch.lineHeight === "number") selectionStyles.lineHeight = patch.lineHeight;
+        if (typeof patch.letterSpacing === "number") {
+          const size = typeof activeText.fontSize === "number" ? activeText.fontSize : 34;
+          selectionStyles.charSpacing = toFabricCharSpacing(patch.letterSpacing, size);
+        }
+        if (typeof patch.stroke === "string" || patch.stroke === null) {
+          selectionStyles.stroke = patch.stroke ?? undefined;
+        }
+        if (typeof patch.strokeWidth === "number") {
+          selectionStyles.strokeWidth = patch.strokeWidth;
+        }
+        if (typeof patch.strokeLineJoin === "string") {
+          selectionStyles.strokeLineJoin = patch.strokeLineJoin;
+        }
+        if (isBebasNeue && wantsBold) {
+          selectionStyles.stroke = fauxBoldFill;
+          selectionStyles.strokeWidth = fauxBoldWidth;
+          selectionStyles.strokeLineJoin = "round";
+        }
+        if (isBebasNeue && wantsNormal) {
+          selectionStyles.stroke = null;
+          selectionStyles.strokeWidth = 0;
+        }
+        if (Object.keys(selectionStyles).length > 0) {
+          activeText.setSelectionStyles(selectionStyles, start, end);
+        }
       }
-      (active as unknown as { setCoords: () => void }).setCoords();
+
+      if (!hasSelection && activeText.styles && Object.keys(activeText.styles).length > 0) {
+        const styleKeysToStrip: string[] = [];
+        if ("fill" in patch) styleKeysToStrip.push("fill");
+        if ("fontWeight" in patch) styleKeysToStrip.push("fontWeight");
+        if ("fontStyle" in patch) styleKeysToStrip.push("fontStyle");
+        if ("underline" in patch) styleKeysToStrip.push("underline");
+        if ("linethrough" in patch) styleKeysToStrip.push("linethrough");
+        if ("fontFamily" in patch) styleKeysToStrip.push("fontFamily");
+        if ("fontSize" in patch) styleKeysToStrip.push("fontSize");
+        if ("lineHeight" in patch) styleKeysToStrip.push("lineHeight");
+        if ("letterSpacing" in patch) styleKeysToStrip.push("charSpacing");
+        if ("stroke" in patch) styleKeysToStrip.push("stroke");
+        if ("strokeWidth" in patch) styleKeysToStrip.push("strokeWidth");
+        if ("strokeLineJoin" in patch) styleKeysToStrip.push("strokeLineJoin");
+        if (isBebasNeue && "fontWeight" in patch) {
+          styleKeysToStrip.push("stroke", "strokeWidth", "strokeLineJoin");
+        }
+        if (styleKeysToStrip.length > 0) {
+          const cleaned = stripTextStyleKeys(
+            activeText.styles as TextStyleMap,
+            styleKeysToStrip
+          );
+          activeText.styles = cleaned ?? {};
+        }
+      }
+
+      const alignChanged =
+        typeof patch.textAlign === "string" && patch.textAlign !== prevAlign;
+      const shouldInitDimensions = affectsLayout || alignChanged;
+      if (preserveWidth && typeof prevWidth === "number") {
+        activeText.width = prevWidth;
+      }
+      if (shouldInitDimensions) {
+        activeText.initDimensions?.();
+        if (selectionAnchor && isEditing) {
+          activeText.selectionStart = selectionAnchor.start;
+          activeText.selectionEnd = selectionAnchor.end;
+        }
+      }
+      if (preserveWidth && typeof prevWidth === "number") {
+        activeText.width = prevWidth;
+      }
+      const nextWidth =
+        typeof activeText.width === "number" ? activeText.width : prevWidth;
+      if (typeof prevTop === "number") {
+        activeText.top = prevTop;
+      }
+      if (anchorX !== null && typeof nextWidth === "number") {
+        if (prevAlign === "center") {
+          activeText.left = anchorX - nextWidth / 2;
+        } else if (prevAlign === "right") {
+          activeText.left = anchorX - nextWidth;
+        } else if (typeof prevLeft === "number") {
+          activeText.left = prevLeft;
+        }
+      } else if (typeof prevLeft === "number") {
+        activeText.left = prevLeft;
+      }
+      activeText.dirty = true;
+      activeText.setCoords?.();
       canvas.requestRenderAll();
 
       const normalizedHeight =
@@ -869,15 +1462,40 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         typeof (active as unknown as { width?: unknown }).width === "number"
           ? Math.round((active as unknown as { width: number }).width)
           : undefined;
+      const styleSnapshot = cloneTextStyles(activeText.styles);
+      const nextStyles = styleSnapshot && Object.keys(styleSnapshot).length > 0 ? styleSnapshot : null;
+      const patchForSlide: Partial<SlideObjectV1> = { ...patch };
+      if (hasSelection) {
+        delete patchForSlide.fontFamily;
+        delete patchForSlide.fontSize;
+        delete patchForSlide.fill;
+        delete patchForSlide.fontWeight;
+        delete patchForSlide.fontStyle;
+        delete patchForSlide.lineHeight;
+        delete patchForSlide.letterSpacing;
+        delete patchForSlide.underline;
+        delete patchForSlide.linethrough;
+        delete patchForSlide.stroke;
+        delete patchForSlide.strokeWidth;
+        delete patchForSlide.strokeLineJoin;
+      } else if (typeof resolvedFontWeight === "number") {
+        patchForSlide.fontWeight = resolvedFontWeight;
+      }
+      if (!hasSelection && isBebasNeue && "fontWeight" in patch) {
+        patchForSlide.stroke = wantsBold ? fauxBoldFill : null;
+        patchForSlide.strokeWidth = wantsBold ? fauxBoldWidth : 0;
+        patchForSlide.strokeLineJoin = "round";
+      }
 
       const currentSlide = slideRef.current;
       const nextObjects = (currentSlide.objects ?? []).map((o) => {
         if (!o || o.id !== id) return o;
         return {
           ...o,
-          ...patch,
+          ...patchForSlide,
           ...(typeof normalizedHeight === "number" ? { height: normalizedHeight } : null),
-          ...(typeof normalizedWidth === "number" ? { width: normalizedWidth } : null)
+          ...(typeof normalizedWidth === "number" ? { width: normalizedWidth } : null),
+          styles: nextStyles ?? undefined
         };
       });
       emit({ ...currentSlide, objects: nextObjects });
@@ -1094,6 +1712,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     if (isAnyEditing(canvas)) return false;
     return selectObjectById(canvas, id);
   }, []);
+  const clearSelection = React.useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return false;
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    return true;
+  }, []);
 
   React.useImperativeHandle(
     ref,
@@ -1104,10 +1729,12 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       copySelection,
       paste,
       selectById,
+      clearSelection,
       exportPngDataUrl
     }),
     [
       addText,
+      clearSelection,
       copySelection,
       deleteSelection,
       duplicateSelection,
@@ -1135,8 +1762,6 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const cb = onSelectionChangeRef.current;
       const ids = getActiveIds(canvas);
       cb?.(ids);
-      const cropId = cropModeRef.current;
-      if (cropId && !ids.includes(cropId)) setCropModeId(null);
       scheduleToolbarUpdate();
     };
 
@@ -1154,6 +1779,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       const id = getObjectId(target);
       if (!id) return;
+      delete textSelectionRef.current[id];
 
       const text = (target as unknown as { text?: unknown }).text;
       if (typeof text !== "string") return;
@@ -1194,6 +1820,34 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       window.setTimeout(tryDelete, 50);
     };
 
+    const onSelectionChanged = (e: { target?: FabricObject }) => {
+      const target = e.target as
+        | (FabricObject & {
+            selectionStart?: number;
+            selectionEnd?: number;
+            text?: string;
+            isEditing?: boolean;
+          })
+        | undefined;
+      if (!target || (target as unknown as { type?: unknown }).type !== "textbox") return;
+      if (!target.isEditing) return;
+      const id = getObjectId(target as FabricObject);
+      if (!id) return;
+      const start = typeof target.selectionStart === "number" ? target.selectionStart : 0;
+      const end =
+        typeof target.selectionEnd === "number"
+          ? target.selectionEnd
+          : target.text?.length ?? 0;
+      const textLength = typeof target.text === "string" ? target.text.length : 0;
+      if (end > start) {
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        textSelectionRef.current[id] = { start, end, at: now, textLength };
+      } else {
+        delete textSelectionRef.current[id];
+      }
+      scheduleToolbarUpdate();
+    };
+
     const onModified = (e: { target?: FabricObject }) => {
       if (isHydratingRef.current) return;
       const target = e.target;
@@ -1209,6 +1863,37 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const scaleY = clampNumber(target.scaleY, 1);
 
       const rawObj = currentSlide.objects.find((o) => o?.id === id);
+      if (rawObj?.type === "image") {
+        const slideW = clampNumber(slideRef.current.width, 1080);
+        const slideH = clampNumber(slideRef.current.height, 1080);
+        const rect =
+          typeof (target as unknown as { getBoundingRect?: unknown }).getBoundingRect === "function"
+            ? (target as unknown as {
+                getBoundingRect: () => { left: number; top: number; width: number; height: number };
+              }).getBoundingRect()
+            : {
+                left: clampNumber(target.left, 0),
+                top: clampNumber(target.top, 0),
+                width: clampNumber(target.width, 1),
+                height: clampNumber(target.height, 1)
+              };
+        const outside =
+          rect.left > slideW ||
+          rect.top > slideH ||
+          rect.left + rect.width < 0 ||
+          rect.top + rect.height < 0;
+        if (outside) {
+          const liveCanvas = fabricRef.current;
+          if (liveCanvas) {
+            liveCanvas.remove(target);
+            liveCanvas.requestRenderAll();
+          }
+          const nextObjects = currentSlide.objects.filter((o) => o?.id !== id);
+          emit({ ...currentSlide, objects: nextObjects });
+          scheduleToolbarUpdate();
+          return;
+        }
+      }
       if (rawObj?.type === "image") {
         const group = target as unknown as Group;
         const meta = getImageMeta(target);
@@ -1354,6 +2039,33 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               : next.fontSize ?? 34;
           next.letterSpacing = fromFabricCharSpacing(cs, fs);
         }
+        if (typeof (target as unknown as { stroke?: unknown }).stroke === "string") {
+          next.stroke = String((target as unknown as { stroke?: unknown }).stroke);
+        } else {
+          next.stroke = undefined;
+        }
+        if (typeof (target as unknown as { strokeWidth?: unknown }).strokeWidth === "number") {
+          next.strokeWidth = clampNumber(
+            (target as unknown as { strokeWidth?: unknown }).strokeWidth,
+            0
+          );
+        } else {
+          next.strokeWidth = undefined;
+        }
+        if (typeof (target as unknown as { strokeLineJoin?: unknown }).strokeLineJoin === "string") {
+          next.strokeLineJoin = String(
+            (target as unknown as { strokeLineJoin?: unknown }).strokeLineJoin
+          );
+        } else {
+          next.strokeLineJoin = undefined;
+        }
+        const rawStyles = (target as unknown as { styles?: unknown }).styles;
+        const styleSnapshot = cloneTextStyles(rawStyles);
+        if (styleSnapshot && Object.keys(styleSnapshot).length > 0) {
+          next.styles = styleSnapshot;
+        } else {
+          next.styles = undefined;
+        }
         next.underline = Boolean((target as unknown as { underline?: unknown }).underline);
         next.linethrough = Boolean(
           (target as unknown as { linethrough?: unknown }).linethrough
@@ -1383,112 +2095,148 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
     const onTextChanged = (e: { target?: FabricObject }) => onModified(e);
 
-    const onMouseDown = (opt: unknown) => {
-      const cropId = cropModeRef.current;
-      if (!cropId) return;
-      if (isAnyEditing(canvas)) return;
-
-      const evt = (opt as { e?: unknown } | null)?.e;
-      const active = canvas.getActiveObject() as FabricObject | null;
-      if (!active) return;
-      const id = getObjectId(active);
-      if (!id || id !== cropId) return;
-      if (getObjectKind(active) !== "image") return;
-
-      const raw = slideRef.current.objects.find((o) => o?.id === cropId);
-      if (!raw || raw.type !== "image") return;
-
-      const pointer = (canvas as unknown as { getPointer?: (e: unknown) => { x: number; y: number } })
-        .getPointer?.call(canvas, evt) ?? { x: 0, y: 0 };
-      cropDragRef.current = {
-        id: cropId,
-        startX: pointer.x,
-        startY: pointer.y,
-        startOffsetX: clampNumber(raw.contentOffsetX, 0),
-        startOffsetY: clampNumber(raw.contentOffsetY, 0)
-      };
-      canvas.requestRenderAll();
-    };
-
-    const onMouseMove = (opt: unknown) => {
-      const drag = cropDragRef.current;
-      if (!drag) return;
-      if (cropModeRef.current !== drag.id) {
-        cropDragRef.current = null;
-        return;
+    const guidesRef = { v: null as Line | null, h: null as Line | null };
+    const ensureGuide = (axis: "v" | "h") => {
+      const existing = guidesRef[axis];
+      if (existing && existing.canvas === canvas) return existing;
+      const line =
+        axis === "v"
+          ? new Line([0, 0, 0, 0], {
+              stroke: "#a855f7",
+              strokeWidth: 1,
+              selectable: false,
+              evented: false,
+              excludeFromExport: true,
+              strokeDashArray: [4, 4]
+            })
+          : new Line([0, 0, 0, 0], {
+              stroke: "#a855f7",
+              strokeWidth: 1,
+              selectable: false,
+              evented: false,
+              excludeFromExport: true,
+              strokeDashArray: [4, 4]
+            });
+      line.visible = false;
+      canvas.add(line);
+      if (typeof (canvas as unknown as { bringObjectToFront?: unknown }).bringObjectToFront === "function") {
+        (canvas as unknown as { bringObjectToFront: (obj: FabricObject) => void }).bringObjectToFront(line);
       }
-      if (isAnyEditing(canvas)) return;
-
-      const evt = (opt as { e?: unknown } | null)?.e;
-      const active = canvas.getActiveObject() as FabricObject | null;
-      if (!active) return;
-      const id = getObjectId(active);
-      if (!id || id !== drag.id) return;
-      if (getObjectKind(active) !== "image") return;
-
-      const raw = slideRef.current.objects.find((o) => o?.id === drag.id);
-      if (!raw || raw.type !== "image") return;
-
-      const meta = getImageMeta(active);
-      if (!meta) return;
-
-      const frameW = clampNumber(raw.width, 400);
-      const frameH = clampNumber(raw.height, frameW);
-      const baseline = computeCoverCrop(
-        meta.naturalWidth,
-        meta.naturalHeight,
-        frameW,
-        frameH,
-        drag.startOffsetX,
-        drag.startOffsetY
-      );
-
-      const pointer = (canvas as unknown as { getPointer?: (e: unknown) => { x: number; y: number } })
-        .getPointer?.call(canvas, evt) ?? { x: 0, y: 0 };
-      const dx = pointer.x - drag.startX;
-      const dy = pointer.y - drag.startY;
-      const nextOffsetX = drag.startOffsetX - dx / Math.max(0.001, baseline.scale);
-      const nextOffsetY = drag.startOffsetY - dy / Math.max(0.001, baseline.scale);
-
-      const nextRaw: SlideObjectV1 = {
-        ...raw,
-        contentOffsetX: nextOffsetX,
-        contentOffsetY: nextOffsetY
-      };
-
-      const normalized = syncImageGroupAppearance(active as unknown as Group, nextRaw, meta);
-      const currentSlide = slideRef.current;
-      const nextObjects = currentSlide.objects.map((o) => {
-        if (!o || o.id !== drag.id) return o;
-        return {
-          ...o,
-          contentOffsetX: normalized.normalizedOffsetX,
-          contentOffsetY: normalized.normalizedOffsetY
-        };
-      });
-      emit({ ...currentSlide, objects: nextObjects });
-      scheduleToolbarUpdate();
+      guidesRef[axis] = line;
+      return line;
     };
-
-    const onMouseUp = () => {
-      cropDragRef.current = null;
-    };
-
-    const onDoubleClick = (ev: MouseEvent) => {
-      if (isAnyEditing(canvas)) return;
-      const findTarget = (canvas as unknown as { findTarget?: (e: MouseEvent) => FabricObject | null })
-        .findTarget;
-      const target = typeof findTarget === "function" ? findTarget.call(canvas, ev) : null;
-      if (!target) return;
-      const id = getObjectId(target);
-      if (!id) return;
-      const raw = slideRef.current.objects.find((o) => o?.id === id);
-      if (!raw || raw.type !== "image") return;
-
-      setCropModeId((prev) => (prev === id ? null : id));
-      canvas.setActiveObject(target);
-      scheduleToolbarUpdate();
+    const showGuides = (opts: { x: number | null; y: number | null }) => {
+      const slideW = clampNumber(slideRef.current.width, 1080);
+      const slideH = clampNumber(slideRef.current.height, 1080);
+      if (opts.x !== null) {
+        const v = ensureGuide("v");
+        v.set({ x1: opts.x, x2: opts.x, y1: 0, y2: slideH, visible: true });
+        if (typeof (canvas as unknown as { bringObjectToFront?: unknown }).bringObjectToFront === "function") {
+          (canvas as unknown as { bringObjectToFront: (obj: FabricObject) => void }).bringObjectToFront(v);
+        }
+      } else if (guidesRef.v) {
+        guidesRef.v.set({ visible: false });
+      }
+      if (opts.y !== null) {
+        const h = ensureGuide("h");
+        h.set({ x1: 0, x2: slideW, y1: opts.y, y2: opts.y, visible: true });
+        if (typeof (canvas as unknown as { bringObjectToFront?: unknown }).bringObjectToFront === "function") {
+          (canvas as unknown as { bringObjectToFront: (obj: FabricObject) => void }).bringObjectToFront(h);
+        }
+      } else if (guidesRef.h) {
+        guidesRef.h.set({ visible: false });
+      }
       canvas.requestRenderAll();
+    };
+    const hideGuides = () => {
+      if (guidesRef.v) guidesRef.v.set({ visible: false });
+      if (guidesRef.h) guidesRef.h.set({ visible: false });
+      canvas.requestRenderAll();
+    };
+
+    const onObjectMoving = (e: { target?: FabricObject }) => {
+      const t = e.target;
+      if (!t) return;
+      const slideW = clampNumber(slideRef.current.width, 1080);
+      const slideH = clampNumber(slideRef.current.height, 1080);
+      const w =
+        typeof (t as unknown as { getScaledWidth?: () => number }).getScaledWidth === "function"
+          ? (t as unknown as { getScaledWidth: () => number }).getScaledWidth()
+          : clampNumber((t as unknown as { width?: number }).width, 1);
+      const h =
+        typeof (t as unknown as { getScaledHeight?: () => number }).getScaledHeight === "function"
+          ? (t as unknown as { getScaledHeight: () => number }).getScaledHeight()
+          : clampNumber((t as unknown as { height?: number }).height, 1);
+      const kind = getObjectKind(t);
+      const overflow =
+        kind === "image"
+          ? Math.max(24, Math.min(240, Math.round(Math.min(w, h) * 0.25)))
+          : 0;
+      let nextLeft = clampNumber(t.left, 0);
+      let nextTop = clampNumber(t.top, 0);
+      const snap = 6;
+      let guideX: number | null = null;
+      let guideY: number | null = null;
+
+      const centerX = nextLeft + w / 2;
+      const centerY = nextTop + h / 2;
+
+      if (Math.abs(centerX - slideW / 2) <= snap) {
+        nextLeft = slideW / 2 - w / 2;
+        guideX = slideW / 2;
+      } else if (Math.abs(nextLeft) <= snap) {
+        nextLeft = 0;
+        guideX = 0;
+      } else if (Math.abs(nextLeft + w - slideW) <= snap) {
+        nextLeft = slideW - w;
+        guideX = slideW;
+      }
+
+      if (Math.abs(centerY - slideH / 2) <= snap) {
+        nextTop = slideH / 2 - h / 2;
+        guideY = slideH / 2;
+      } else if (Math.abs(nextTop) <= snap) {
+        nextTop = 0;
+        guideY = 0;
+      } else if (Math.abs(nextTop + h - slideH) <= snap) {
+        nextTop = slideH - h;
+        guideY = slideH;
+      }
+
+      let minLeft = 0;
+      let maxLeft = Math.max(0, slideW - w);
+      let minTop = 0;
+      let maxTop = Math.max(0, slideH - h);
+
+      if (kind === "image") {
+        const margin = overflow;
+        minLeft = -w - margin;
+        maxLeft = slideW + margin;
+        minTop = -h - margin;
+        maxTop = slideH + margin;
+      }
+
+      const clampedLeft = Math.min(Math.max(minLeft, nextLeft), maxLeft);
+      const clampedTop = Math.min(Math.max(minTop, nextTop), maxTop);
+      if (clampedLeft !== nextLeft || clampedTop !== nextTop) {
+        nextLeft = clampedLeft;
+        nextTop = clampedTop;
+      }
+
+      if (nextLeft !== t.left || nextTop !== t.top) {
+        t.set({ left: nextLeft, top: nextTop });
+      }
+
+      if (guideX !== null || guideY !== null) {
+        showGuides({ x: guideX, y: guideY });
+      } else {
+        hideGuides();
+      }
+      scheduleToolbarUpdate();
+    };
+    const onObjectModified = (e: { target?: FabricObject }) => {
+      hideGuides();
+      onModified(e);
     };
 
     canvas.on("selection:created", emitSelection);
@@ -1498,35 +2246,119 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       cb?.([]);
       setTextToolbar(null);
       setImageToolbar(null);
-      setCropModeId(null);
+      hideGuides();
     });
-    canvas.on("object:moving", scheduleToolbarUpdate);
+    canvas.on("mouse:down", (e) => {
+      const activeObj = canvas.getActiveObject() as
+        | (FabricObject & {
+            isEditing?: boolean;
+            exitEditing?: () => void;
+            containsPoint?: (point: { x: number; y: number }) => boolean;
+            getBoundingRect?: (
+              absolute?: boolean,
+              calculate?: boolean
+            ) => { left: number; top: number; width: number; height: number };
+          })
+        | null;
+      const target = e?.target as FabricObject | undefined;
+      const native = e?.e as MouseEvent | PointerEvent | TouchEvent | undefined;
+      const findTarget = (canvas as unknown as { findTarget?: (evt: unknown) => unknown }).findTarget;
+      const getScenePoint = (canvas as unknown as {
+        getScenePoint?: (evt: unknown) => { x: number; y: number };
+      }).getScenePoint;
+      const slideW = clampNumber(slideRef.current.width, 1080);
+      const slideH = clampNumber(slideRef.current.height, 1080);
+      const scenePoint =
+        native && typeof getScenePoint === "function" ? getScenePoint.call(canvas, native) : null;
+      const outsideSlide =
+        scenePoint &&
+        (scenePoint.x < 0 || scenePoint.y < 0 || scenePoint.x > slideW || scenePoint.y > slideH);
+      const isEditing = Boolean(activeObj?.isEditing);
+      const insideActive =
+        Boolean(activeObj) &&
+        Boolean(scenePoint) &&
+        (typeof activeObj?.containsPoint === "function"
+          ? activeObj.containsPoint(scenePoint as { x: number; y: number })
+          : (() => {
+              const rect = activeObj?.getBoundingRect?.(true, true);
+              if (!rect || !scenePoint) return false;
+              return (
+                scenePoint.x >= rect.left &&
+                scenePoint.x <= rect.left + rect.width &&
+                scenePoint.y >= rect.top &&
+                scenePoint.y <= rect.top + rect.height
+              );
+            })());
+
+      if (isEditing && insideActive && !outsideSlide) return;
+      const hasFinder = Boolean(native && typeof findTarget === "function");
+      const targetInfo = hasFinder
+        ? (findTarget.call(canvas, native) as
+            | {
+                currentTarget?: FabricObject;
+                target?: FabricObject;
+                currentContainer?: FabricObject;
+                container?: FabricObject;
+              }
+            | undefined)
+        : undefined;
+      const hitCandidate = hasFinder
+        ? targetInfo?.currentTarget ??
+          targetInfo?.target ??
+          targetInfo?.currentContainer ??
+          targetInfo?.container ??
+          null
+        : target ?? null;
+      const isSelectableTarget =
+        hitCandidate &&
+        (hitCandidate as unknown as { selectable?: boolean }).selectable !== false &&
+        (hitCandidate as unknown as { evented?: boolean }).evented !== false;
+      const hitIsActive = Boolean(hitCandidate && activeObj && hitCandidate === activeObj);
+      const hitValid = Boolean(isSelectableTarget && (!hitIsActive || insideActive));
+
+      if (outsideSlide || !hitValid) {
+        if (activeObj?.isEditing && typeof activeObj.exitEditing === "function") {
+          activeObj.exitEditing();
+        }
+        canvas.discardActiveObject();
+        canvas.requestRenderAll();
+      }
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const liveCanvas = fabricRef.current;
+      if (!liveCanvas) return;
+      const activeObj = liveCanvas.getActiveObject() as
+        | (FabricObject & { isEditing?: boolean; exitEditing?: () => void })
+        | null;
+      if (activeObj?.isEditing && typeof activeObj.exitEditing === "function") {
+        activeObj.exitEditing();
+      }
+      liveCanvas.discardActiveObject();
+      liveCanvas.requestRenderAll();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    canvas.on("object:moving", onObjectMoving);
     canvas.on("object:scaling", scheduleToolbarUpdate);
     canvas.on("object:rotating", scheduleToolbarUpdate);
-    canvas.on("object:modified", onModified);
+    canvas.on("object:modified", onObjectModified);
     canvas.on("text:changed", onTextChanged);
+    canvas.on("text:selection:changed", onSelectionChanged);
     canvas.on("text:editing:entered", onEditingEntered);
     canvas.on("text:editing:exited", onEditingExited);
-    canvas.on("mouse:down", onMouseDown);
-    canvas.on("mouse:move", onMouseMove);
-    canvas.on("mouse:up", onMouseUp);
-    canvas.upperCanvasEl.addEventListener("dblclick", onDoubleClick);
-
     return () => {
       canvas.off("selection:created", emitSelection);
       canvas.off("selection:updated", emitSelection);
       canvas.off("selection:cleared");
-      canvas.off("object:moving", scheduleToolbarUpdate);
+      canvas.off("object:moving", onObjectMoving);
       canvas.off("object:scaling", scheduleToolbarUpdate);
       canvas.off("object:rotating", scheduleToolbarUpdate);
-      canvas.off("object:modified", onModified);
+      canvas.off("object:modified", onObjectModified);
       canvas.off("text:changed", onTextChanged);
+      canvas.off("text:selection:changed", onSelectionChanged);
       canvas.off("text:editing:entered", onEditingEntered);
       canvas.off("text:editing:exited", onEditingExited);
-      canvas.off("mouse:down", onMouseDown);
-      canvas.off("mouse:move", onMouseMove);
-      canvas.off("mouse:up", onMouseUp);
-      canvas.upperCanvasEl.removeEventListener("dblclick", onDoubleClick);
+      window.removeEventListener("keydown", onKeyDown);
       canvas.dispose();
       fabricRef.current = null;
     };
@@ -1604,66 +2436,119 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               if (renderTokenRef.current !== token) return;
               if (!fabricRef.current) return;
 
-              const iw = clampNumber(el.naturalWidth, 1);
-              const ih = clampNumber(el.naturalHeight, 1);
-              const meta: ImageMeta = { naturalWidth: iw, naturalHeight: ih };
+	              const iw = clampNumber(el.naturalWidth, 1);
+	              const ih = clampNumber(el.naturalHeight, 1);
+	              const meta: ImageMeta = { naturalWidth: iw, naturalHeight: ih };
 
-              const img = new Image(el);
-              img.set({
-                left: 0,
-                top: 0,
+	              const offsetX = clampNumber(raw.contentOffsetX, 0);
+	              const offsetY = clampNumber(raw.contentOffsetY, 0);
+
+	              const cornerValue = clampNumberRange(raw.cornerRounding, 0, 100, 18);
+	              const radiusPx = (Math.min(width, height) / 2) * (cornerValue / 100);
+
+	              const strokeWeight =
+	                raw.strokeWeight === "thin" ||
+	                raw.strokeWeight === "medium" ||
+	                raw.strokeWeight === "thick"
+	                  ? raw.strokeWeight
+	                  : "none";
+	              const strokeWidth = strokeWidthForWeight(strokeWeight);
+		              const strokeColor =
+		                typeof raw.strokeColor === "string"
+		                  ? raw.strokeColor
+		                  : styleDefaults?.palette?.accent ?? "#7c3aed";
+
+	              const contentW = Math.max(1, width);
+	              const contentH = Math.max(1, height);
+
+              const crop = computeCoverCrop(iw, ih, contentW, contentH, offsetX, offsetY);
+
+	              const img = new Image(el);
+              const localLeft = -width / 2;
+              const localTop = -height / 2;
+              const contentLeft = localLeft;
+              const contentTop = localTop;
+              const contentLocalLeft = -contentW / 2;
+              const contentLocalTop = -contentH / 2;
+	              img.set({
+	                left: contentLocalLeft,
+	                top: contentLocalTop,
+	                originX: "left",
+	                originY: "top",
+	                cropX: crop.cropX,
+	                cropY: crop.cropY,
+	                width: crop.cropW,
+	                height: crop.cropH,
+	                scaleX: crop.scale,
+	                scaleY: crop.scale,
+	                objectCaching: false,
+	                selectable: false,
+	                evented: false
+	              });
+
+		              const strokeRect = new Rect({
+		                left: localLeft,
+		                top: localTop,
+		                originX: "left",
+		                originY: "top",
+		                width: Math.max(1, width),
+		                height: Math.max(1, height),
+		                rx: radiusPx,
+		                ry: radiusPx,
+		                fill: "rgba(0,0,0,0)",
+		                opacity: strokeWidth > 0 ? 1 : 0,
+		                objectCaching: false,
+		                selectable: false,
+	                evented: false,
+	                strokeUniform: true,
+	                stroke: strokeColor,
+	                strokeWidth,
+	                strokeLineJoin: "round"
+	              });
+	              (strokeRect as unknown as { dojogramRole?: string }).dojogramRole = "stroke";
+
+		              // Clip only the image content so strokes aren't clipped.
+              const contentClip = new Rect({
+                left: contentLocalLeft,
+                top: contentLocalTop,
                 originX: "left",
                 originY: "top",
-                selectable: false,
-                evented: false
+                width: contentW,
+                height: contentH,
+                rx: radiusPx,
+                ry: radiusPx,
+                objectCaching: false,
+                absolutePositioned: false
               });
 
-              const innerClip = new Rect({
-                left: 0,
-                top: 0,
-                originX: "left",
-                originY: "top",
-                width,
-                height,
-                rx: 0,
-                ry: 0
-              });
+	              const content = new Group([img], {
+	                left: contentLeft,
+	                top: contentTop,
+	                originX: "left",
+	                originY: "top",
+	                width: contentW,
+	                height: contentH,
+	                layoutManager: new LayoutManager(new FixedLayout()),
+	                clipPath: contentClip,
+	                objectCaching: false,
+	                selectable: false,
+	                evented: false
+	              });
+	              (content as unknown as { dojogramRole?: string }).dojogramRole = "content";
 
-              const inner = new Group([img], {
-                left: 0,
-                top: 0,
-                originX: "left",
-                originY: "top",
-                selectable: false,
-                evented: false
-              });
-              (inner as unknown as { dojogramRole?: string }).dojogramRole = "imageInner";
-              inner.clipPath = innerClip;
-
-              const strokeRect = new Rect({
-                left: 0,
-                top: 0,
-                originX: "left",
-                originY: "top",
-                width,
-                height,
-                fill: "rgba(0,0,0,0)",
-                opacity: 0,
-                selectable: false,
-                evented: false,
-                strokeUniform: true
-              });
-              (strokeRect as unknown as { dojogramRole?: string }).dojogramRole = "stroke";
-
-              const frame = new Group([inner, strokeRect], {
-                left: x,
-                top: y,
-                originX: "left",
-                originY: "top",
-                selectable: true,
-                evented: true,
-                hasControls: true,
-                hasBorders: true,
+	              const frame = new Group([content, strokeRect], {
+	                left: x,
+	                top: y,
+	                originX: "left",
+	                originY: "top",
+	                width,
+	                height,
+	                layoutManager: new LayoutManager(new FixedLayout()),
+	                objectCaching: false,
+	                selectable: true,
+	                evented: true,
+	                hasControls: true,
+	                hasBorders: true,
                 borderColor: "#7c3aed",
                 cornerStyle: "circle",
                 cornerColor: "#7c3aed",
@@ -1680,7 +2565,6 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
               canvas.add(frame);
               canvas.sendObjectToBack(frame);
-              frame.triggerLayout();
               frame.setCoords();
               canvas.requestRenderAll();
             })
@@ -1697,6 +2581,12 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               ? Math.min(0.95, Math.max(0, overlay.opacity))
               : 0.35;
           const color = typeof overlay.color === "string" ? overlay.color : "#000000";
+          const mode =
+            overlay.mode === "bottom-gradient" ? "bottom-gradient" : "solid";
+          const height =
+            typeof overlay.height === "number" && Number.isFinite(overlay.height)
+              ? Math.min(1, Math.max(0.2, overlay.height))
+              : 0.6;
           const rect = new Rect({
             left: 0,
             top: 0,
@@ -1705,10 +2595,28 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             originX: "left",
             originY: "top",
             fill: color,
-            opacity,
+            opacity: mode === "solid" ? opacity : 1,
             selectable: false,
             evented: false
           });
+          if (mode === "bottom-gradient") {
+            const rgb = hexToRgb(color) ?? [0, 0, 0];
+            const [r, g, b] = rgb;
+            const start = Math.min(1, Math.max(0, 1 - height));
+            rect.set(
+              "fill",
+              new Gradient({
+                type: "linear",
+                gradientUnits: "pixels",
+                coords: { x1: 0, y1: 0, x2: 0, y2: slideH },
+                colorStops: [
+                  { offset: 0, color: `rgba(${r}, ${g}, ${b}, 0)` },
+                  { offset: start, color: `rgba(${r}, ${g}, ${b}, 0)` },
+                  { offset: 1, color: `rgba(${r}, ${g}, ${b}, ${opacity})` }
+                ]
+              })
+            );
+          }
           canvas.add(rect);
           canvas.requestRenderAll();
         }
@@ -1724,6 +2632,14 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           const x = clampNumber(raw.x, 80);
           const y = clampNumber(raw.y, 240);
           const width = clampNumber(raw.width, Math.max(240, slideW - 160));
+          const rawStyleSnapshot = cloneTextStyles(raw.styles);
+          const styleSnapshot = isBebasNeueFamily(raw.fontFamily)
+            ? normalizeBebasNeueStyles(
+                rawStyleSnapshot,
+                raw.fill ?? "#111827",
+                clampNumber(raw.fontSize, 56)
+              )
+            : rawStyleSnapshot;
 
           const textbox = new Textbox(text, {
             left: x,
@@ -1735,7 +2651,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             // (cursor positioning depends on accurate glyph metrics).
             fontFamily: toFontStack(raw.fontFamily),
             fontSize: clampNumber(raw.fontSize, 56),
-            fontWeight: clampNumber(raw.fontWeight, 600),
+            fontWeight: resolveFontWeightForFamily(raw.fontFamily, clampNumber(raw.fontWeight, 600)),
             fill: raw.fill ?? "#111827",
             textAlign: raw.textAlign ?? "left",
             fontStyle: raw.fontStyle ?? "normal",
@@ -1746,6 +2662,14 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             ),
             underline: Boolean(raw.underline),
             linethrough: Boolean(raw.linethrough),
+            stroke: typeof raw.stroke === "string" ? raw.stroke : undefined,
+            strokeWidth:
+              typeof raw.strokeWidth === "number" && Number.isFinite(raw.strokeWidth)
+                ? raw.strokeWidth
+                : 0,
+            strokeLineJoin:
+              typeof raw.strokeLineJoin === "string" ? raw.strokeLineJoin : "round",
+            styles: styleSnapshot ?? undefined,
             editable: true
           });
 
@@ -1785,30 +2709,33 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   }, [renderKey]);
 
   React.useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    // Side panels translate the canvas container with an animation; keep pointer
+    // math in sync during the whole transition window.
+    let raf: number | null = null;
+    const start = typeof performance !== "undefined" ? performance.now() : Date.now();
+
+    const tick = () => {
+      canvas.calcOffset();
+      canvas.requestRenderAll();
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (now - start < 260) raf = requestAnimationFrame(tick);
+    };
+
+    tick();
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [layoutKey]);
+
+  React.useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const obs = new ResizeObserver(() => fitCanvas());
     obs.observe(container);
     return () => obs.disconnect();
   }, [fitCanvas]);
-
-  React.useEffect(() => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
-    const cropId = cropModeId;
-    for (const obj of canvas.getObjects() as unknown as FabricObject[]) {
-      if (getObjectKind(obj) !== "image") continue;
-      const id = getObjectId(obj);
-      if (!id) continue;
-      const isCrop = Boolean(cropId && cropId === id);
-      (obj as unknown as { lockMovementX?: boolean }).lockMovementX = isCrop;
-      (obj as unknown as { lockMovementY?: boolean }).lockMovementY = isCrop;
-      (obj as unknown as { hasControls?: boolean }).hasControls = !isCrop;
-      (obj as unknown as { hoverCursor?: string }).hoverCursor = isCrop ? "grab" : "move";
-    }
-    scheduleToolbarUpdate();
-    canvas.requestRenderAll();
-  }, [cropModeId, scheduleToolbarUpdate]);
 
   return (
     <div
@@ -1820,6 +2747,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       {textToolbar ? (
         <div
           className="absolute z-40 flex items-center gap-1 rounded-2xl border bg-background/90 px-2 py-1 shadow-sm backdrop-blur"
+          ref={textToolbarRef}
           style={{ left: textToolbar.left, top: textToolbar.top }}
         >
           <select
@@ -1935,6 +2863,86 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           />
 
           <input
+            type="number"
+            min={0.8}
+            max={2.5}
+            step={0.05}
+            inputMode="decimal"
+            value={lineHeightDraft}
+            onFocus={() => setLineHeightFocused(true)}
+            onBlur={() => {
+              setLineHeightFocused(false);
+              const n = Number(lineHeightDraft.replace(",", "."));
+              if (!Number.isFinite(n)) {
+                setLineHeightDraft(String(textToolbar.lineHeight.toFixed(2)));
+                return;
+              }
+              const clamped = clampNumberRange(n, 0.8, 2.5, textToolbar.lineHeight);
+              setLineHeightDraft(String(clamped.toFixed(2)));
+              patchActiveText({ lineHeight: clamped });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                (e.currentTarget as HTMLInputElement).blur();
+                return;
+              }
+              if (e.key === "e" || e.key === "E" || e.key === "+" || e.key === "-") {
+                e.preventDefault();
+              }
+            }}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^0-9.,]/g, "").replace(",", ".");
+              setLineHeightDraft(raw);
+              const n = Number(raw);
+              if (!Number.isFinite(n)) return;
+              const clamped = clampNumberRange(n, 0.8, 2.5, textToolbar.lineHeight);
+              patchActiveText({ lineHeight: clamped });
+            }}
+            className="w-[70px] rounded-lg border bg-background px-2 py-1 text-xs"
+            title="Altura (linha)"
+          />
+
+          <input
+            type="number"
+            min={-10}
+            max={30}
+            step={0.5}
+            inputMode="decimal"
+            value={letterSpacingDraft}
+            onFocus={() => setLetterSpacingFocused(true)}
+            onBlur={() => {
+              setLetterSpacingFocused(false);
+              const n = Number(letterSpacingDraft.replace(",", "."));
+              if (!Number.isFinite(n)) {
+                setLetterSpacingDraft(String(textToolbar.letterSpacing));
+                return;
+              }
+              const clamped = clampNumberRange(n, -10, 30, textToolbar.letterSpacing);
+              setLetterSpacingDraft(String(clamped));
+              patchActiveText({ letterSpacing: clamped });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                (e.currentTarget as HTMLInputElement).blur();
+                return;
+              }
+              if (e.key === "e" || e.key === "E" || e.key === "+") {
+                e.preventDefault();
+              }
+            }}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^0-9.,-]/g, "").replace(",", ".");
+              setLetterSpacingDraft(raw);
+              const n = Number(raw);
+              if (!Number.isFinite(n)) return;
+              const clamped = clampNumberRange(n, -10, 30, textToolbar.letterSpacing);
+              patchActiveText({ letterSpacing: clamped });
+            }}
+            className="w-[70px] rounded-lg border bg-background px-2 py-1 text-xs"
+            title="Espaçamento (px)"
+          />
+
+          <input
             type="color"
             value={textToolbar.fill}
             onChange={(e) => patchActiveText({ fill: e.target.value })}
@@ -1948,7 +2956,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               const bold = textToolbar.fontWeight >= 600;
               patchActiveText({ fontWeight: bold ? 400 : 700 });
             }}
-            className="rounded-lg border bg-background px-2 py-1 text-xs font-semibold hover:bg-secondary"
+            className={[
+              "rounded-lg border bg-background px-2 py-1 text-xs font-semibold hover:bg-secondary",
+              textToolbar.fontWeight >= 600 ? "border-primary" : ""
+            ].join(" ")}
             title="Negrito"
           >
             B
@@ -1960,7 +2971,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                 fontStyle: textToolbar.fontStyle === "italic" ? "normal" : "italic"
               });
             }}
-            className="rounded-lg border bg-background px-2 py-1 text-xs italic hover:bg-secondary"
+            className={[
+              "rounded-lg border bg-background px-2 py-1 text-xs italic hover:bg-secondary",
+              textToolbar.fontStyle === "italic" ? "border-primary" : ""
+            ].join(" ")}
             title="Itálico"
           >
             I
@@ -1968,7 +2982,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           <button
             type="button"
             onClick={() => patchActiveText({ underline: !textToolbar.underline })}
-            className="rounded-lg border bg-background px-2 py-1 text-xs underline hover:bg-secondary"
+            className={[
+              "rounded-lg border bg-background px-2 py-1 text-xs underline hover:bg-secondary",
+              textToolbar.underline ? "border-primary" : ""
+            ].join(" ")}
             title="Sublinhado"
           >
             U
@@ -1976,10 +2993,36 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           <button
             type="button"
             onClick={() => patchActiveText({ linethrough: !textToolbar.linethrough })}
-            className="rounded-lg border bg-background px-2 py-1 text-xs line-through hover:bg-secondary"
+            className={[
+              "rounded-lg border bg-background px-2 py-1 text-xs line-through hover:bg-secondary",
+              textToolbar.linethrough ? "border-primary" : ""
+            ].join(" ")}
             title="Tachado"
           >
             S
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const strokeOn =
+                typeof textToolbar.strokeWidth === "number" && textToolbar.strokeWidth > 0;
+              if (strokeOn) {
+                patchActiveText({ stroke: null, strokeWidth: 0 });
+                return;
+              }
+              patchActiveText({
+                stroke: getReadableStroke(textToolbar.fill),
+                strokeWidth: 2,
+                strokeLineJoin: "round"
+              });
+            }}
+            className={[
+              "rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary",
+              textToolbar.strokeWidth > 0 ? "border-primary" : ""
+            ].join(" ")}
+            title="Contorno"
+          >
+            Ø
           </button>
 
           <div className="mx-1 h-6 w-px bg-border" />
@@ -2023,6 +3066,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       {imageToolbar ? (
         <div
           className="absolute z-40 flex items-center gap-2 rounded-2xl border bg-background/90 px-2 py-1 shadow-sm backdrop-blur"
+          ref={imageToolbarRef}
           style={{ left: imageToolbar.left, top: imageToolbar.top }}
         >
           <div className="flex items-center gap-1">
@@ -2137,10 +3181,6 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               title="Arredondamento (0-100)"
             />
           </div>
-
-          {imageToolbar.cropMode ? (
-            <span className="ml-1 text-xs text-muted-foreground">Reenquadrar: arraste</span>
-          ) : null}
         </div>
       ) : null}
     </div>

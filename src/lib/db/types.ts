@@ -25,6 +25,7 @@ export type CarouselDraft = {
     accent?: string;
     additional?: string[];
   };
+  referenceSimilarity?: number;
 };
 
 export type CarouselGenerationStatus =

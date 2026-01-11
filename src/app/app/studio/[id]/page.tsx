@@ -37,6 +37,16 @@ type StudioTemplate = {
   template_data: Record<string, unknown>;
 };
 
+type StudioCreatorProfile = {
+  id: string;
+  display_name: string;
+  handle: string | null;
+  role_title: string | null;
+  avatar_path: string | null;
+  is_default: boolean;
+  avatarUrl: string | null;
+};
+
 export default async function StudioPage({
   params,
   searchParams
@@ -129,12 +139,39 @@ export default async function StudioPage({
     withSignedUrls(generatedAssets, 12)
   ]);
 
+  async function withAvatarUrls(
+    profiles: Array<(typeof projectData.creatorProfiles)[number]>
+  ): Promise<StudioCreatorProfile[]> {
+    const signed = await Promise.all(
+      profiles.map(async (profile) => {
+        const rawPath =
+          typeof profile.avatar_path === "string" ? profile.avatar_path : null;
+        if (!rawPath) {
+          return { ...profile, avatarUrl: null };
+        }
+        if (rawPath.startsWith("http")) {
+          return { ...profile, avatarUrl: rawPath };
+        }
+        const { signedUrl } = await createSignedUrl({
+          bucket: "carousel-assets",
+          path: rawPath,
+          expiresIn: 60 * 60 * 6
+        });
+        return { ...profile, avatarUrl: signedUrl ?? null };
+      })
+    );
+    return signed as StudioCreatorProfile[];
+  }
+
+  const creatorProfiles = await withAvatarUrls(projectData.creatorProfiles);
+
   const statusLabel =
     projectData.carousel.generation_status === "succeeded"
       ? "Pronto"
       : projectData.carousel.generation_status === "running"
         ? "Gerando"
         : "MVP";
+  const generationStatus = projectData.carousel.generation_status ?? "idle";
 
   return (
     <StudioShell
@@ -144,10 +181,12 @@ export default async function StudioPage({
       slides={slidesRaw as Record<string, unknown>[]}
       placeholderCount={placeholderCount}
       statusLabel={statusLabel}
+      generationStatus={generationStatus}
       progress={{ imagesDone, imagesTotal, imagesFailed }}
       assets={{ generated: signedGeneratedAssets, reference: signedReferenceAssets }}
       palettes={projectData.palettes as unknown as StudioPalette[]}
       templates={projectData.templates as unknown as StudioTemplate[]}
+      creatorProfiles={creatorProfiles}
       catalog={{
         templates: projectData.templates.length,
         presets: projectData.presets.length,

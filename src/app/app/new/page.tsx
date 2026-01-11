@@ -2,8 +2,10 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { CarouselDraft } from "@/lib/db/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { getLocale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
+import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
 
 const newCarouselSchema = z.object({
   inputMode: z.enum(["topic", "prompt"]),
@@ -22,8 +24,55 @@ const newCarouselSchema = z.object({
   creatorRole: z.string().optional(),
   paletteBackground: z.string().optional(),
   paletteText: z.string().optional(),
-  paletteAccent: z.string().optional()
+  paletteAccent: z.string().optional(),
+  referenceSimilarity: z.coerce.number().int().min(0).max(100).optional()
 });
+
+const MAX_REFERENCE_BYTES = 500 * 1024 * 1024;
+
+async function uploadReferenceFiles(input: {
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
+  carouselId: string;
+  workspaceId: string;
+  ownerId: string;
+  files: File[];
+  kind: "style" | "content";
+}) {
+  const admin = createSupabaseAdminClientIfAvailable();
+  const storageClient = admin ?? input.supabase;
+
+  for (const file of input.files) {
+    const ext = file.name.split(".").pop() || "bin";
+    const path = `workspaces/${input.workspaceId}/carousels/${input.carouselId}/reference/${crypto.randomUUID()}.${ext}`;
+
+    const { error: uploadError } = await storageClient.storage
+      .from("carousel-assets")
+      .upload(path, file, { upsert: false, contentType: file.type });
+
+    if (uploadError) {
+      throw new Error(uploadError.message);
+    }
+
+    const { error: insertError } = await input.supabase
+      .from("carousel_assets")
+      .insert({
+        workspace_id: input.workspaceId,
+        carousel_id: input.carouselId,
+        owner_id: input.ownerId,
+        asset_type: "reference",
+        storage_bucket: "carousel-assets",
+        storage_path: path,
+        mime_type: file.type,
+        metadata: {
+          reference_kind: input.kind
+        }
+      });
+
+    if (insertError) {
+      throw new Error(insertError.message);
+    }
+  }
+}
 
 async function createCarousel(formData: FormData) {
   "use server";
@@ -40,6 +89,24 @@ async function createCarousel(formData: FormData) {
 
   if (!membership?.workspace_id) {
     redirect("/app");
+  }
+
+  const styleFilesRaw = formData
+    .getAll("styleReferences")
+    .filter((f): f is File => f instanceof File);
+  const contentFilesRaw = formData
+    .getAll("contentReferences")
+    .filter((f): f is File => f instanceof File);
+  const totalReferenceBytes = [...styleFilesRaw, ...contentFilesRaw].reduce(
+    (sum, file) => sum + file.size,
+    0
+  );
+  if (totalReferenceBytes > MAX_REFERENCE_BYTES) {
+    redirect(
+      `/app/new?error=${encodeURIComponent(
+        "As referências excedem 500MB. Reduza o tamanho das imagens."
+      )}`
+    );
   }
 
   const parsed = newCarouselSchema.safeParse({
@@ -79,6 +146,9 @@ async function createCarousel(formData: FormData) {
       : undefined,
     paletteAccent: formData.get("paletteAccent")
       ? String(formData.get("paletteAccent"))
+      : undefined,
+    referenceSimilarity: formData.get("referenceSimilarity")
+      ? Number(formData.get("referenceSimilarity"))
       : undefined
   });
 
@@ -87,6 +157,16 @@ async function createCarousel(formData: FormData) {
   }
 
   const values = parsed.data;
+  const hasTopic = typeof values.topic === "string" && values.topic.trim().length > 0;
+  const hasPrompt = typeof values.prompt === "string" && values.prompt.trim().length > 0;
+  if (
+    (values.inputMode === "topic" && !hasTopic) ||
+    (values.inputMode === "prompt" && !hasPrompt)
+  ) {
+    redirect(
+      `/app/new?error=${encodeURIComponent("Informe um tema ou prompt válido.")}`
+    );
+  }
 
   const draft: CarouselDraft = {
     inputMode: values.inputMode,
@@ -109,7 +189,8 @@ async function createCarousel(formData: FormData) {
       background: values.paletteBackground,
       text: values.paletteText,
       accent: values.paletteAccent
-    }
+    },
+    referenceSimilarity: values.referenceSimilarity
   };
 
   const { data: created, error } = await supabase
@@ -127,6 +208,46 @@ async function createCarousel(formData: FormData) {
     redirect(
       `/app/new?error=${encodeURIComponent(error?.message ?? "Failed to create")}`
     );
+  }
+
+  const styleFiles = styleFilesRaw.slice(0, 10);
+  const contentFiles = contentFilesRaw.slice(0, 10);
+
+  try {
+    if (styleFiles.length > 0) {
+      await uploadReferenceFiles({
+        supabase,
+        carouselId: created.id,
+        workspaceId: membership.workspace_id,
+        ownerId: userData.user.id,
+        files: styleFiles,
+        kind: "style"
+      });
+    }
+    if (contentFiles.length > 0) {
+      await uploadReferenceFiles({
+        supabase,
+        carouselId: created.id,
+        workspaceId: membership.workspace_id,
+        ownerId: userData.user.id,
+        files: contentFiles,
+        kind: "content"
+      });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Falha ao enviar referências.";
+    redirect(`/app/new?error=${encodeURIComponent(message)}`);
+  }
+
+  const generated = await generateFirstDraftForCarousel({ carouselId: created.id });
+  if (!generated.ok) {
+    const message =
+      generated.error === "GENERATION_RUNNING"
+        ? "Geração já em andamento."
+        : generated.error === "UNAUTHENTICATED"
+          ? "Você precisa entrar novamente."
+          : String(generated.error ?? "Falha ao gerar.");
+    redirect(`/app/studio/${created.id}?error=${encodeURIComponent(message)}`);
   }
 
   redirect(`/app/carousels/${created.id}`);
@@ -322,6 +443,60 @@ export default async function NewCarouselPage({
               />
             </label>
           </div>
+        </div>
+
+        <div className="space-y-3 rounded-md border p-3">
+          <div className="text-sm font-medium">
+            {t(locale, "newCarousel.referencesTitle")}
+          </div>
+          <p className="text-xs text-slate-600">
+            {t(locale, "newCarousel.referenceHint")}
+          </p>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <label className="block space-y-2">
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.styleReferences")}
+              </span>
+              <input
+                className="w-full"
+                type="file"
+                name="styleReferences"
+                accept="image/*"
+                multiple
+              />
+            </label>
+            <label className="block space-y-2">
+              <span className="text-sm font-medium">
+                {t(locale, "newCarousel.contentReferences")}
+              </span>
+              <input
+                className="w-full"
+                type="file"
+                name="contentReferences"
+                accept="image/*"
+                multiple
+              />
+            </label>
+          </div>
+
+          <label className="block space-y-2">
+            <span className="text-sm font-medium">
+              {t(locale, "newCarousel.similarity")}
+            </span>
+            <div className="flex items-center gap-3">
+              <input
+                className="w-full"
+                type="range"
+                name="referenceSimilarity"
+                min={0}
+                max={100}
+                defaultValue={70}
+              />
+            </div>
+            <p className="text-xs text-slate-600">
+              {t(locale, "newCarousel.similarityHint")}
+            </p>
+          </label>
         </div>
 
         <button
