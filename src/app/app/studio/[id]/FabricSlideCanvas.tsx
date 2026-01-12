@@ -11,12 +11,18 @@ import {
   Line,
   Rect,
   Textbox,
+  filters,
   type FabricObject
 } from "fabric";
 
 type TextVariant = "title" | "body" | "tagline" | "cta" | "custom";
 
 type TextStyleMap = Record<string, Record<string, Record<string, unknown>>>;
+
+const DEFAULT_IMAGE_FILTER_COLOR = "#d11a1a";
+const DEFAULT_MARKER_COLOR = "#f5e663";
+const DEFAULT_MARKER_HEIGHT = 0.6;
+const DEFAULT_MARKER_ANGLE = -2;
 
 type SlideObjectV1 = {
   id?: string;
@@ -28,6 +34,8 @@ type SlideObjectV1 = {
   cornerRounding?: number; // 0-100 (0 = square, 100 = circle)
   strokeWeight?: "none" | "thin" | "medium" | "thick";
   strokeColor?: string;
+  filterColor?: string;
+  filterOpacity?: number;
   x?: number;
   y?: number;
   width?: number;
@@ -43,6 +51,10 @@ type SlideObjectV1 = {
   letterSpacing?: number; // px (UI-friendly); converted to Fabric `charSpacing`
   underline?: boolean;
   linethrough?: boolean;
+  textBackgroundColor?: string | null;
+  markerColor?: string;
+  markerHeight?: number;
+  markerAngle?: number;
   stroke?: string | null;
   strokeWidth?: number;
   strokeLineJoin?: string;
@@ -283,6 +295,29 @@ function setImageMeta(obj: FabricObject, meta: ImageMeta) {
   (obj as unknown as { dojogramImageMeta?: ImageMeta }).dojogramImageMeta = meta;
 }
 
+function configureImageFrameControls(frame: Group) {
+  frame.set({
+    selectable: true,
+    evented: true,
+    hasControls: true,
+    hasBorders: true,
+    borderColor: "#7c3aed",
+    cornerStyle: "circle",
+    cornerColor: "#7c3aed",
+    transparentCorners: false,
+    lockRotation: true,
+    lockScalingFlip: true,
+    lockScalingX: false,
+    lockScalingY: false,
+    lockSkewingX: true,
+    lockSkewingY: true,
+    lockUniScaling: false,
+    centeredScaling: false
+  });
+  frame.setControlsVisibility({ mtr: false });
+  (frame as unknown as { hasRotatingPoint?: boolean }).hasRotatingPoint = false;
+}
+
 function getObjectKind(obj: FabricObject): string | null {
   const anyObj = obj as unknown as { dojogramKind?: unknown };
   return typeof anyObj.dojogramKind === "string" ? anyObj.dojogramKind : null;
@@ -386,6 +421,117 @@ function normalizeBebasNeueStyles(
   return Object.keys(next).length > 0 ? next : null;
 }
 
+function ensureTextboxMarkerPatch() {
+  const proto = Textbox.prototype as unknown as {
+    _dojogramMarkerPatch?: boolean;
+    _renderTextLinesBackground?: (ctx: CanvasRenderingContext2D) => void;
+  };
+  if (proto._dojogramMarkerPatch) return;
+  const original = proto._renderTextLinesBackground;
+  if (typeof original !== "function") return;
+
+  proto._renderTextLinesBackground = function renderMarkerBackground(
+    this: Textbox,
+    ctx: CanvasRenderingContext2D
+  ) {
+    const any = this as unknown as {
+      markerHeight?: unknown;
+      markerAngle?: unknown;
+      path?: unknown;
+    };
+    if (any.path) {
+      original.call(this, ctx);
+      return;
+    }
+    if (!this.textBackgroundColor && !this.styleHas("textBackgroundColor")) {
+      return;
+    }
+
+    const originalFill = ctx.fillStyle;
+    const leftOffset = this._getLeftOffset();
+    let lineTopOffset = this._getTopOffset();
+    const markerHeight = clampNumberRange(
+      any.markerHeight,
+      0.25,
+      1,
+      DEFAULT_MARKER_HEIGHT
+    );
+    const markerAngle = clampNumberRange(
+      any.markerAngle,
+      -15,
+      15,
+      DEFAULT_MARKER_ANGLE
+    );
+    const angle = (markerAngle * Math.PI) / 180;
+
+    for (let i = 0, len = this._textLines.length; i < len; i++) {
+      const heightOfLine = this.getHeightOfLine(i);
+      if (!this.textBackgroundColor && !this.styleHas("textBackgroundColor", i)) {
+        lineTopOffset += heightOfLine;
+        continue;
+      }
+      const jlen = this._textLines[i].length;
+      const lineLeftOffset = this._getLineLeftOffset(i);
+      const fullHeight = this.getHeightOfLineImpl(i);
+      const bgHeight = Math.max(1, fullHeight * markerHeight);
+      const baseline = lineTopOffset + fullHeight - fullHeight * this._fontSizeFraction;
+      const offsetY = baseline - bgHeight * (1 - this._fontSizeFraction);
+      let boxWidth = 0;
+      let boxStart = 0;
+      let drawStart: number | undefined;
+      let currentColor: string | undefined;
+      let lastColor = this.getValueOfPropertyAt(i, 0, "textBackgroundColor") as
+        | string
+        | undefined;
+
+      const drawSegment = (color: string | undefined, start: number, width: number) => {
+        if (!color) return;
+        let startX = leftOffset + lineLeftOffset + start;
+        if (this.direction === "rtl") {
+          startX = this.width - startX - width;
+        }
+        ctx.save();
+        ctx.translate(startX, offsetY);
+        if (angle) {
+          ctx.translate(0, bgHeight / 2);
+          ctx.rotate(angle);
+          ctx.translate(0, -bgHeight / 2);
+        }
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, width, bgHeight);
+        ctx.restore();
+      };
+
+      for (let j = 0; j < jlen; j++) {
+        const charBox = this.__charBounds[i][j];
+        currentColor = this.getValueOfPropertyAt(i, j, "textBackgroundColor") as
+          | string
+          | undefined;
+        if (currentColor !== lastColor) {
+          drawStart = leftOffset + lineLeftOffset + boxStart;
+          if (this.direction === "rtl") {
+            drawStart = this.width - drawStart - boxWidth;
+          }
+          drawSegment(lastColor, boxStart, boxWidth);
+          boxStart = charBox.left;
+          boxWidth = charBox.width;
+          lastColor = currentColor;
+        } else {
+          boxWidth += charBox.kernedWidth;
+        }
+      }
+      if (currentColor) {
+        drawSegment(currentColor, boxStart, boxWidth);
+      }
+      lineTopOffset += heightOfLine;
+    }
+
+    ctx.fillStyle = originalFill;
+    this._removeShadow(ctx);
+  };
+  proto._dojogramMarkerPatch = true;
+}
+
 function hexToRgb(value: string): [number, number, number] | null {
   const raw = value.trim().replace("#", "");
   if (raw.length !== 3 && raw.length !== 6) return null;
@@ -476,9 +622,12 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   const onSlideChangeRef = React.useRef<Props["onSlideChange"]>(() => {});
   const imageElementCacheRef = React.useRef<Map<string, HTMLImageElement>>(new Map());
   const imagePromiseCacheRef = React.useRef<Map<string, Promise<HTMLImageElement>>>(new Map());
-  const clipboardRef = React.useRef<{ objects: SlideObjectV1[]; pasteN: number } | null>(
-    null
-  );
+  const fontLoadCacheRef = React.useRef<Map<string, Promise<void>>>(new Map());
+  const clipboardRef = React.useRef<{
+    objects: SlideObjectV1[];
+    pasteN: number;
+    slideKey: string | number | null;
+  } | null>(null);
   const accentColor = styleDefaults?.palette?.accent ?? "#111827";
   const toolbarAccent = styleDefaults?.palette?.accent ?? "#7c3aed";
   const onSelectionChangeRef = React.useRef<Props["onSelectionChange"]>(null);
@@ -499,6 +648,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     textAlign: "left" | "center" | "right" | "justify";
     stroke: string | null;
     strokeWidth: number;
+    markerActive: boolean;
+    markerColor: string;
+    markerHeight: number;
+    markerAngle: number;
   } | null>(null);
   const [imageToolbar, setImageToolbar] = React.useState<{
     left: number;
@@ -507,11 +660,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     cornerRounding: number;
     strokeWeight: NonNullable<SlideObjectV1["strokeWeight"]>;
     strokeColor: string;
+    filterColor: string;
+    filterOpacity: number;
   } | null>(null);
   const textToolbarRef = React.useRef<HTMLDivElement | null>(null);
   const imageToolbarRef = React.useRef<HTMLDivElement | null>(null);
-  const textToolbarSizeRef = React.useRef({ width: 660, height: 44 });
-  const imageToolbarSizeRef = React.useRef({ width: 320, height: 40 });
+  const textToolbarSizeRef = React.useRef({ width: 720, height: 84 });
+  const imageToolbarSizeRef = React.useRef({ width: 520, height: 44 });
   const imageToolbarVisibleRef = React.useRef(false);
   const textSelectionRef = React.useRef<
     Record<string, { start: number; end: number; at: number; textLength: number }>
@@ -525,6 +680,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
   const [letterSpacingFocused, setLetterSpacingFocused] = React.useState(false);
   const [cornerRoundingDraft, setCornerRoundingDraft] = React.useState<string>("");
   const [cornerRoundingFocused, setCornerRoundingFocused] = React.useState(false);
+  React.useEffect(() => {
+    ensureTextboxMarkerPatch();
+  }, []);
   React.useEffect(() => {
     // If the active image changes (or the toolbar disappears), reset transient
     // draft/focus state so sliders don't "stick" across different images.
@@ -617,6 +775,63 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     return p;
   }, []);
 
+  const queueFontReflow = React.useCallback(
+    (
+      textbox: {
+        initDimensions?: () => void;
+        setCoords?: () => void;
+        selectionStart?: number;
+        selectionEnd?: number;
+        isEditing?: boolean;
+      },
+      opts: {
+        fontFamily?: string;
+        fontWeight?: number;
+        fontStyle?: "normal" | "italic";
+        fontSize?: number;
+        token?: number;
+        selection?: { start: number; end: number } | null;
+      }
+    ) => {
+      if (typeof document === "undefined" || !document.fonts?.load) return;
+      const family = normalizeFontFamilyForUi(opts.fontFamily ?? "");
+      if (!family) return;
+      const weight =
+        typeof opts.fontWeight === "number" && Number.isFinite(opts.fontWeight)
+          ? opts.fontWeight
+          : 400;
+      const style = opts.fontStyle === "italic" ? "italic" : "normal";
+      const size =
+        typeof opts.fontSize === "number" && Number.isFinite(opts.fontSize)
+          ? Math.max(12, opts.fontSize)
+          : 40;
+      const key = `${family}:${weight}:${style}`;
+      let promise = fontLoadCacheRef.current.get(key);
+      if (!promise) {
+        const spec = `${style} ${weight} ${Math.round(size)}px "${family}"`;
+        promise = document.fonts
+          .load(spec)
+          .then(() => {})
+          .catch(() => {});
+        fontLoadCacheRef.current.set(key, promise);
+      }
+      promise.then(() => {
+        if (typeof opts.token === "number" && renderTokenRef.current !== opts.token) return;
+        const canvas = fabricRef.current;
+        if (!canvas) return;
+        const selection = opts.selection;
+        textbox.initDimensions?.();
+        if (selection && textbox.isEditing) {
+          textbox.selectionStart = selection.start;
+          textbox.selectionEnd = selection.end;
+        }
+        textbox.setCoords?.();
+        canvas.requestRenderAll();
+      });
+    },
+    []
+  );
+
   const updateTextToolbar = React.useCallback(() => {
     const canvas = fabricRef.current;
     const container = containerRef.current;
@@ -702,6 +917,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       textAlign?: unknown;
       stroke?: unknown;
       strokeWidth?: unknown;
+      textBackgroundColor?: unknown;
+      markerColor?: unknown;
+      markerHeight?: unknown;
+      markerAngle?: unknown;
     };
 
     const activeText = active as unknown as {
@@ -765,6 +984,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const selectionLinethrough = resolveSelectionValue("linethrough", any.linethrough);
     const selectionStroke = resolveSelectionValue("stroke", any.stroke);
     const selectionStrokeWidth = resolveSelectionValue("strokeWidth", any.strokeWidth);
+    const selectionTextBackground = resolveSelectionValue(
+      "textBackgroundColor",
+      any.textBackgroundColor
+    );
 
     const variant =
       getObjectVariant(active) ??
@@ -787,6 +1010,30 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       typeof selectionStroke === "string" &&
       typeof selectionFill === "string" &&
       selectionStroke === selectionFill;
+    const markerActive =
+      typeof selectionTextBackground === "string"
+        ? true
+        : typeof any.textBackgroundColor === "string";
+    const markerColor =
+      typeof selectionTextBackground === "string"
+        ? selectionTextBackground
+        : typeof any.textBackgroundColor === "string"
+          ? any.textBackgroundColor
+          : typeof any.markerColor === "string"
+            ? any.markerColor
+            : DEFAULT_MARKER_COLOR;
+    const markerHeight = clampNumberRange(
+      any.markerHeight,
+      0.25,
+      1,
+      DEFAULT_MARKER_HEIGHT
+    );
+    const markerAngle = clampNumberRange(
+      any.markerAngle,
+      -15,
+      15,
+      DEFAULT_MARKER_ANGLE
+    );
 
     setTextToolbar({
       id,
@@ -814,7 +1061,11 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           ? any.textAlign
           : "left",
       stroke: typeof selectionStroke === "string" ? selectionStroke : null,
-      strokeWidth: typeof selectionStrokeWidth === "number" ? selectionStrokeWidth : 0
+      strokeWidth: typeof selectionStrokeWidth === "number" ? selectionStrokeWidth : 0,
+      markerActive,
+      markerColor,
+      markerHeight,
+      markerAngle
     });
   }, []);
 
@@ -900,6 +1151,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       typeof raw.strokeColor === "string"
         ? raw.strokeColor
         : toolbarAccent;
+    const filterColor =
+      typeof raw.filterColor === "string" ? raw.filterColor : DEFAULT_IMAGE_FILTER_COLOR;
+    const filterOpacity = clampNumberRange(raw.filterOpacity, 0, 1, 0);
 
     setImageToolbar({
       id,
@@ -907,7 +1161,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       top,
       cornerRounding,
       strokeWeight,
-      strokeColor
+      strokeColor,
+      filterColor,
+      filterOpacity
     });
   }, [toolbarAccent]);
 
@@ -1064,6 +1320,34 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           selectable: false,
           evented: false
         });
+        const filterColor =
+          typeof raw.filterColor === "string" ? raw.filterColor : DEFAULT_IMAGE_FILTER_COLOR;
+        const filterOpacity = clampNumberRange(raw.filterOpacity, 0, 1, 0);
+        const nextFilterKey =
+          filterOpacity > 0 ? `${filterColor}:${filterOpacity.toFixed(3)}` : "none";
+        const imageAny = imgObj as unknown as {
+          filters?: unknown[];
+          applyFilters?: () => void;
+          dojogramFilterKey?: string;
+        };
+        if (imageAny.dojogramFilterKey !== nextFilterKey) {
+          const currentFilters = Array.isArray(imageAny.filters) ? [...imageAny.filters] : [];
+          const keptFilters = currentFilters.filter(
+            (f) => (f as { type?: unknown })?.type !== "BlendColor"
+          );
+          if (filterOpacity > 0) {
+            keptFilters.push(
+              new filters.BlendColor({
+                color: filterColor,
+                mode: "multiply",
+                alpha: filterOpacity
+              })
+            );
+          }
+          imageAny.filters = keptFilters;
+          imageAny.applyFilters?.();
+          imageAny.dojogramFilterKey = nextFilterKey;
+        }
         (imgObj as unknown as { dirty?: boolean }).dirty = true;
       }
 
@@ -1167,9 +1451,14 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             ? patch.strokeWeight
             : patch.strokeWeight === "none"
               ? "none"
-              : rawObj.strokeWeight
+              : rawObj.strokeWeight,
+        filterOpacity:
+          typeof patch.filterOpacity === "number"
+            ? clampNumberRange(patch.filterOpacity, 0, 1, rawObj.filterOpacity ?? 0)
+            : rawObj.filterOpacity
       };
       if (typeof patch.strokeColor === "string") nextRaw.strokeColor = patch.strokeColor;
+      if (typeof patch.filterColor === "string") nextRaw.filterColor = patch.filterColor;
 
       const normalized = syncImageGroupAppearance(group, nextRaw, meta);
       const nextObjects = currentSlide.objects.map((o) => {
@@ -1218,6 +1507,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         charSpacing?: number;
         underline?: boolean;
         linethrough?: boolean;
+        textBackgroundColor?: string | null;
+        markerColor?: string;
+        markerHeight?: number;
+        markerAngle?: number;
         textAlign?: SlideObjectV1["textAlign"];
         styles?: Record<string, unknown>;
         selectionStart?: number;
@@ -1227,6 +1520,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           start?: number,
           end?: number
         ) => void;
+        getSelectionStyles?: (
+          start?: number,
+          end?: number
+        ) => Array<Record<string, unknown>>;
         initDimensions?: () => void;
         setCoords?: () => void;
         dirty?: boolean;
@@ -1278,6 +1575,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         typeof activeText.selectionEnd === "number"
           ? { start: activeText.selectionStart, end: activeText.selectionEnd }
           : null;
+      const currentWeight =
+        typeof activeText.fontWeight === "number" ? activeText.fontWeight : 400;
       const resolvedFontFamily =
         typeof patch.fontFamily === "string" ? patch.fontFamily : activeText.fontFamily;
       const wantsBold = typeof patch.fontWeight === "number" && patch.fontWeight >= 600;
@@ -1296,9 +1595,57 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           : typeof activeText.fill === "string"
             ? activeText.fill
             : "#111827";
+      const normalizedWeightForFamily =
+        typeof patch.fontFamily === "string" && !("fontWeight" in patch)
+          ? resolveFontWeightForFamily(patch.fontFamily, currentWeight)
+          : null;
+      const markerColor =
+        typeof patch.markerColor === "string"
+          ? patch.markerColor
+          : typeof activeText.markerColor === "string"
+            ? activeText.markerColor
+            : typeof activeText.textBackgroundColor === "string"
+              ? activeText.textBackgroundColor
+              : DEFAULT_MARKER_COLOR;
+      const markerHeight =
+        typeof patch.markerHeight === "number"
+          ? clampNumberRange(patch.markerHeight, 0.25, 1, DEFAULT_MARKER_HEIGHT)
+          : clampNumberRange(activeText.markerHeight, 0.25, 1, DEFAULT_MARKER_HEIGHT);
+      const markerAngle =
+        typeof patch.markerAngle === "number"
+          ? clampNumberRange(patch.markerAngle, -15, 15, DEFAULT_MARKER_ANGLE)
+          : clampNumberRange(activeText.markerAngle, -15, 15, DEFAULT_MARKER_ANGLE);
+      const wantsMarkerToggle = "textBackgroundColor" in patch;
+      const nextMarkerValue =
+        wantsMarkerToggle && typeof patch.textBackgroundColor === "string"
+          ? patch.textBackgroundColor
+          : wantsMarkerToggle
+            ? null
+            : null;
+      const shouldUpdateMarkerColor =
+        typeof patch.markerColor === "string" &&
+        typeof activeText.textBackgroundColor === "string";
 
       if (!hasSelection && typeof patch.fontFamily === "string") {
         activeText.fontFamily = toFontStack(patch.fontFamily);
+        if (
+          isBebasNeue &&
+          typeof normalizedWeightForFamily === "number" &&
+          normalizedWeightForFamily !== currentWeight
+        ) {
+          activeText.fontWeight = normalizedWeightForFamily;
+          if (currentWeight >= 600) {
+            (active as unknown as { stroke?: string }).stroke = fauxBoldFill;
+            (active as unknown as { strokeWidth?: number }).strokeWidth = fauxBoldWidth;
+            (active as unknown as { strokeLineJoin?: string }).strokeLineJoin = "round";
+          } else {
+            const currentStroke = (active as unknown as { stroke?: unknown }).stroke;
+            if (currentStroke === fauxBoldFill) {
+              (active as unknown as { stroke?: string }).stroke = undefined;
+              (active as unknown as { strokeWidth?: number }).strokeWidth = 0;
+            }
+          }
+        }
       }
       if (!hasSelection && typeof patch.fontSize === "number") {
         activeText.fontSize = patch.fontSize;
@@ -1324,6 +1671,22 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       }
       if (!hasSelection && typeof patch.linethrough === "boolean") {
         activeText.linethrough = patch.linethrough;
+      }
+      if (!hasSelection && wantsMarkerToggle) {
+        activeText.textBackgroundColor =
+          typeof nextMarkerValue === "string" ? nextMarkerValue : undefined;
+      }
+      if (!hasSelection && shouldUpdateMarkerColor) {
+        activeText.textBackgroundColor = markerColor;
+      }
+      if (typeof patch.markerColor === "string") {
+        activeText.markerColor = patch.markerColor;
+      }
+      if (typeof patch.markerHeight === "number") {
+        activeText.markerHeight = markerHeight;
+      }
+      if (typeof patch.markerAngle === "number") {
+        activeText.markerAngle = markerAngle;
       }
       if (typeof patch.textAlign === "string") {
         activeText.textAlign = patch.textAlign;
@@ -1354,6 +1717,16 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         const start = selectionRange.start;
         const end = selectionRange.end;
         const selectionStyles: Record<string, unknown> = {};
+        const selectionHasMarker =
+          (wantsMarkerToggle || typeof patch.markerColor === "string") &&
+          typeof activeText.getSelectionStyles === "function"
+            ? activeText
+                .getSelectionStyles(start, end)
+                .some(
+                  (style) =>
+                    typeof (style as Record<string, unknown>)?.textBackgroundColor === "string"
+                )
+            : false;
         if (typeof patch.fill === "string") selectionStyles.fill = patch.fill;
         if (typeof resolvedFontWeight === "number")
           selectionStyles.fontWeight = resolvedFontWeight;
@@ -1361,6 +1734,10 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         if (typeof patch.underline === "boolean") selectionStyles.underline = patch.underline;
         if (typeof patch.linethrough === "boolean")
           selectionStyles.linethrough = patch.linethrough;
+        if (wantsMarkerToggle) selectionStyles.textBackgroundColor = nextMarkerValue;
+        if (typeof patch.markerColor === "string" && selectionHasMarker) {
+          selectionStyles.textBackgroundColor = patch.markerColor;
+        }
         if (typeof patch.fontFamily === "string")
           selectionStyles.fontFamily = toFontStack(patch.fontFamily);
         if (typeof patch.fontSize === "number") selectionStyles.fontSize = patch.fontSize;
@@ -1406,6 +1783,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         if ("stroke" in patch) styleKeysToStrip.push("stroke");
         if ("strokeWidth" in patch) styleKeysToStrip.push("strokeWidth");
         if ("strokeLineJoin" in patch) styleKeysToStrip.push("strokeLineJoin");
+        if ("textBackgroundColor" in patch) styleKeysToStrip.push("textBackgroundColor");
+        if ("markerColor" in patch) styleKeysToStrip.push("textBackgroundColor");
         if (isBebasNeue && "fontWeight" in patch) {
           styleKeysToStrip.push("stroke", "strokeWidth", "strokeLineJoin");
         }
@@ -1453,6 +1832,21 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       activeText.dirty = true;
       activeText.setCoords?.();
       canvas.requestRenderAll();
+      if (isBebasNeue) {
+        queueFontReflow(activeText, {
+          fontFamily: resolvedFontFamily,
+          fontWeight:
+            typeof resolvedFontWeight === "number"
+              ? resolvedFontWeight
+              : typeof activeText.fontWeight === "number"
+                ? activeText.fontWeight
+                : undefined,
+          fontStyle: activeText.fontStyle,
+          fontSize: activeText.fontSize,
+          selection: selectionAnchor,
+          token: undefined
+        });
+      }
 
       const normalizedHeight =
         typeof (active as unknown as { height?: unknown }).height === "number"
@@ -1465,6 +1859,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       const styleSnapshot = cloneTextStyles(activeText.styles);
       const nextStyles = styleSnapshot && Object.keys(styleSnapshot).length > 0 ? styleSnapshot : null;
       const patchForSlide: Partial<SlideObjectV1> = { ...patch };
+      if (typeof patch.markerColor === "string") patchForSlide.markerColor = markerColor;
+      if (typeof patch.markerHeight === "number") patchForSlide.markerHeight = markerHeight;
+      if (typeof patch.markerAngle === "number") patchForSlide.markerAngle = markerAngle;
+      if (wantsMarkerToggle) patchForSlide.textBackgroundColor = nextMarkerValue;
+      if (!hasSelection && shouldUpdateMarkerColor) {
+        patchForSlide.textBackgroundColor = markerColor;
+      }
       if (hasSelection) {
         delete patchForSlide.fontFamily;
         delete patchForSlide.fontSize;
@@ -1478,6 +1879,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         delete patchForSlide.stroke;
         delete patchForSlide.strokeWidth;
         delete patchForSlide.strokeLineJoin;
+        delete patchForSlide.textBackgroundColor;
       } else if (typeof resolvedFontWeight === "number") {
         patchForSlide.fontWeight = resolvedFontWeight;
       }
@@ -1591,7 +1993,15 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const nextObjects = (currentSlide.objects ?? []).filter((o) => !ids.includes(o?.id ?? ""));
     emit({ ...currentSlide, objects: nextObjects });
     return true;
-  }, [emit]);
+  }, [
+    assetUrlsById,
+    emit,
+    loadImageElement,
+    queueFontReflow,
+    renderKey,
+    styleDefaults?.palette?.accent,
+    syncImageGroupAppearance
+  ]);
 
   const copySelection = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -1603,9 +2013,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const currentSlide = slideRef.current;
     const selected = (currentSlide.objects ?? []).filter((o) => o?.id && ids.includes(o.id));
     if (selected.length === 0) return false;
-    clipboardRef.current = { objects: selected.map((o) => ({ ...o })), pasteN: 0 };
+    clipboardRef.current = {
+      objects: selected.map((o) => ({ ...o })),
+      pasteN: 0,
+      slideKey: renderKey ?? null
+    };
     return true;
-  }, []);
+  }, [renderKey]);
 
   const paste = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -1614,62 +2028,261 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
     const clip = clipboardRef.current;
     if (!clip || clip.objects.length === 0) return false;
+    const sameSlide = clip.slideKey === renderKey;
     clip.pasteN += 1;
-    const dx = 24 * clip.pasteN;
-    const dy = 24 * clip.pasteN;
+    const dx = sameSlide ? 24 * clip.pasteN : 0;
+    const dy = sameSlide ? 24 * clip.pasteN : 0;
 
     const currentSlide = slideRef.current;
     const nextObjects = [...(currentSlide.objects ?? [])];
+    const slideW = clampNumber(currentSlide.width, 1080);
+    let lastPastedId: string | null = null;
 
     for (const o of clip.objects) {
-      if (o.type !== "text") continue;
-      const id = createId("text");
-      const text = o.text ?? "";
-      const x = clampNumber(o.x, 80) + dx;
-      const y = clampNumber(o.y, 240) + dy;
-      const width = clampNumber(o.width, 560);
+      if (o.type === "text") {
+        const id = createId("text");
+        const text = o.text ?? "";
+        const x = clampNumber(o.x, 80) + dx;
+        const y = clampNumber(o.y, 240) + dy;
+        const width = clampNumber(o.width, 560);
+        const rawStyleSnapshot = cloneTextStyles(o.styles);
+        const styleSnapshot = isBebasNeueFamily(o.fontFamily)
+          ? normalizeBebasNeueStyles(
+              rawStyleSnapshot,
+              o.fill ?? "#111827",
+              clampNumber(o.fontSize, 48)
+            )
+          : rawStyleSnapshot;
+        const markerHeight = clampNumberRange(
+          o.markerHeight,
+          0.25,
+          1,
+          DEFAULT_MARKER_HEIGHT
+        );
+        const markerAngle = clampNumberRange(
+          o.markerAngle,
+          -15,
+          15,
+          DEFAULT_MARKER_ANGLE
+        );
+        const markerColor =
+          typeof o.markerColor === "string"
+            ? o.markerColor
+            : typeof o.textBackgroundColor === "string"
+              ? o.textBackgroundColor
+              : DEFAULT_MARKER_COLOR;
+        const textBackgroundColor =
+          typeof o.textBackgroundColor === "string" ? o.textBackgroundColor : null;
+        const resolvedWeight = resolveFontWeightForFamily(
+          o.fontFamily,
+          clampNumber(o.fontWeight, 600)
+        );
 
-      const textbox = new Textbox(text, {
-        left: x,
-        top: y,
-        width,
-        originX: "left",
-        originY: "top",
-        fontFamily: toFontStack(o.fontFamily),
-        fontSize: clampNumber(o.fontSize, 48),
-        fontWeight: clampNumber(o.fontWeight, 600),
-        fill: o.fill ?? "#111827",
-        textAlign: o.textAlign ?? "left",
-        fontStyle: o.fontStyle ?? "normal",
-        lineHeight: clampNumber(o.lineHeight, 1.2),
-        charSpacing: toFabricCharSpacing(
-          typeof o.letterSpacing === "number" ? o.letterSpacing : 0,
-          clampNumber(o.fontSize, 48)
-        ),
-        underline: Boolean(o.underline),
-        linethrough: Boolean(o.linethrough),
-        editable: true
-      });
-      textbox.initDimensions();
-      setObjectId(textbox, id);
-      setObjectVariant(textbox, (o.variant as TextVariant) ?? "body");
-      canvas.add(textbox);
+        const textbox = new Textbox(text, {
+          left: x,
+          top: y,
+          width,
+          originX: "left",
+          originY: "top",
+          fontFamily: toFontStack(o.fontFamily),
+          fontSize: clampNumber(o.fontSize, 48),
+          fontWeight: resolvedWeight,
+          fill: o.fill ?? "#111827",
+          textAlign: o.textAlign ?? "left",
+          fontStyle: o.fontStyle ?? "normal",
+          lineHeight: clampNumber(o.lineHeight, 1.2),
+          charSpacing: toFabricCharSpacing(
+            typeof o.letterSpacing === "number" ? o.letterSpacing : 0,
+            clampNumber(o.fontSize, 48)
+          ),
+          underline: Boolean(o.underline),
+          linethrough: Boolean(o.linethrough),
+          stroke: typeof o.stroke === "string" ? o.stroke : undefined,
+          strokeWidth:
+            typeof o.strokeWidth === "number" && Number.isFinite(o.strokeWidth)
+              ? o.strokeWidth
+              : 0,
+          strokeLineJoin:
+            typeof o.strokeLineJoin === "string" ? o.strokeLineJoin : "round",
+          textBackgroundColor: textBackgroundColor ?? undefined,
+          styles: styleSnapshot ?? undefined,
+          editable: true
+        });
+        (textbox as unknown as { markerHeight?: number }).markerHeight = markerHeight;
+        (textbox as unknown as { markerAngle?: number }).markerAngle = markerAngle;
+        (textbox as unknown as { markerColor?: string }).markerColor = markerColor;
+        textbox.initDimensions();
+        setObjectId(textbox, id);
+        setObjectVariant(textbox, (o.variant as TextVariant) ?? "body");
+        canvas.add(textbox);
+        queueFontReflow(textbox, {
+          fontFamily: o.fontFamily,
+          fontWeight: resolvedWeight,
+          fontStyle: o.fontStyle ?? "normal",
+          fontSize: clampNumber(o.fontSize, 48)
+        });
 
-      nextObjects.push({
+        nextObjects.push({
+          ...o,
+          id,
+          variant: (o.variant as TextVariant) ?? "body",
+          x: Math.round(x),
+          y: Math.round(y),
+          width: Math.round(width),
+          height: typeof textbox.height === "number" ? Math.round(textbox.height) : o.height,
+          lineHeight: clampNumber(o.lineHeight, 1.2),
+          letterSpacing:
+            typeof o.letterSpacing === "number" ? o.letterSpacing : 0
+        });
+        lastPastedId = id;
+        continue;
+      }
+      if (o.type !== "image") continue;
+      const id = createId("image");
+      const assetId = typeof o.assetId === "string" ? o.assetId : null;
+      if (!assetId) continue;
+      const url =
+        typeof assetUrlsById?.[assetId] === "string" ? assetUrlsById?.[assetId] : null;
+      const x = clampNumber(o.x, 0) + dx;
+      const y = clampNumber(o.y, 0) + dy;
+      const width = clampNumber(o.width, Math.max(1, slideW - 160));
+      const height = clampNumber(o.height, Math.max(1, width));
+      const nextRaw: SlideObjectV1 = {
         ...o,
         id,
-        variant: (o.variant as TextVariant) ?? "body",
         x: Math.round(x),
         y: Math.round(y),
         width: Math.round(width),
-        height: typeof textbox.height === "number" ? Math.round(textbox.height) : o.height,
-        lineHeight: clampNumber(o.lineHeight, 1.2),
-        letterSpacing:
-          typeof o.letterSpacing === "number" ? o.letterSpacing : 0
-      });
+        height: Math.round(height)
+      };
+      nextObjects.push(nextRaw);
+      lastPastedId = id;
+      if (!url) continue;
+
+      loadImageElement(url)
+        .then((el) => {
+          const liveCanvas = fabricRef.current;
+          if (!liveCanvas) return;
+          const iw = clampNumber(el.naturalWidth, 1);
+          const ih = clampNumber(el.naturalHeight, 1);
+          const meta: ImageMeta = { naturalWidth: iw, naturalHeight: ih };
+          const offsetX = clampNumber(nextRaw.contentOffsetX, 0);
+          const offsetY = clampNumber(nextRaw.contentOffsetY, 0);
+          const cornerValue = clampNumberRange(nextRaw.cornerRounding, 0, 100, 18);
+          const radiusPx = (Math.min(width, height) / 2) * (cornerValue / 100);
+          const strokeWeight =
+            nextRaw.strokeWeight === "thin" ||
+            nextRaw.strokeWeight === "medium" ||
+            nextRaw.strokeWeight === "thick"
+              ? nextRaw.strokeWeight
+              : "none";
+          const strokeWidth = strokeWidthForWeight(strokeWeight);
+          const strokeColor =
+            typeof nextRaw.strokeColor === "string"
+              ? nextRaw.strokeColor
+              : styleDefaults?.palette?.accent ?? "#7c3aed";
+          const contentW = Math.max(1, width);
+          const contentH = Math.max(1, height);
+          const crop = computeCoverCrop(iw, ih, contentW, contentH, offsetX, offsetY);
+          const img = new Image(el);
+          const localLeft = -width / 2;
+          const localTop = -height / 2;
+          const contentLeft = localLeft;
+          const contentTop = localTop;
+          const contentLocalLeft = -contentW / 2;
+          const contentLocalTop = -contentH / 2;
+          img.set({
+            left: contentLocalLeft,
+            top: contentLocalTop,
+            originX: "left",
+            originY: "top",
+            cropX: crop.cropX,
+            cropY: crop.cropY,
+            width: crop.cropW,
+            height: crop.cropH,
+            scaleX: crop.scale,
+            scaleY: crop.scale,
+            objectCaching: false,
+            selectable: false,
+            evented: false
+          });
+
+          const strokeRect = new Rect({
+            left: localLeft,
+            top: localTop,
+            originX: "left",
+            originY: "top",
+            width: Math.max(1, width),
+            height: Math.max(1, height),
+            rx: radiusPx,
+            ry: radiusPx,
+            fill: "rgba(0,0,0,0)",
+            opacity: strokeWidth > 0 ? 1 : 0,
+            objectCaching: false,
+            selectable: false,
+            evented: false,
+            strokeUniform: true,
+            stroke: strokeColor,
+            strokeWidth,
+            strokeLineJoin: "round"
+          });
+          (strokeRect as unknown as { dojogramRole?: string }).dojogramRole = "stroke";
+
+          const contentClip = new Rect({
+            left: contentLocalLeft,
+            top: contentLocalTop,
+            originX: "left",
+            originY: "top",
+            width: contentW,
+            height: contentH,
+            rx: radiusPx,
+            ry: radiusPx,
+            objectCaching: false,
+            absolutePositioned: false
+          });
+
+          const content = new Group([img], {
+            left: contentLeft,
+            top: contentTop,
+            originX: "left",
+            originY: "top",
+            width: contentW,
+            height: contentH,
+            layoutManager: new LayoutManager(new FixedLayout()),
+            clipPath: contentClip,
+            objectCaching: false,
+            selectable: false,
+            evented: false
+          });
+          (content as unknown as { dojogramRole?: string }).dojogramRole = "content";
+
+          const frame = new Group([content, strokeRect], {
+            left: x,
+            top: y,
+            originX: "left",
+            originY: "top",
+            width,
+            height,
+            layoutManager: new LayoutManager(new FixedLayout()),
+            objectCaching: false
+          });
+          configureImageFrameControls(frame);
+          setObjectId(frame as unknown as FabricObject, id);
+          setObjectKind(frame as unknown as FabricObject, "image");
+          setImageMeta(frame as unknown as FabricObject, meta);
+          syncImageGroupAppearance(frame, nextRaw, meta);
+          liveCanvas.add(frame);
+          liveCanvas.sendObjectToBack(frame);
+          frame.setCoords();
+          if (lastPastedId === id) {
+            liveCanvas.setActiveObject(frame as unknown as FabricObject);
+          }
+          liveCanvas.requestRenderAll();
+        })
+        .catch(() => {});
     }
 
-    const lastId = nextObjects.length > 0 ? nextObjects[nextObjects.length - 1]?.id : null;
+    const lastId = lastPastedId ?? null;
     if (lastId) {
       const lastCanvasObj = canvas
         .getObjects()
@@ -1757,6 +2370,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       enableRetinaScaling: false
     });
     fabricRef.current = canvas;
+    canvas.selectionKey = ["shiftKey", "metaKey", "ctrlKey"];
 
     const emitSelection = () => {
       const cb = onSelectionChangeRef.current;
@@ -1768,6 +2382,22 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     const onEditingEntered = (e: { target?: FabricObject }) => {
       const target = e.target as unknown as { initDimensions?: () => void } | undefined;
       target?.initDimensions?.();
+      if (target) {
+        const textAny = target as unknown as {
+          fontFamily?: string;
+          fontWeight?: number;
+          fontStyle?: "normal" | "italic";
+          fontSize?: number;
+        };
+        if (typeof textAny.fontFamily === "string") {
+          queueFontReflow(target, {
+            fontFamily: textAny.fontFamily,
+            fontWeight: textAny.fontWeight,
+            fontStyle: textAny.fontStyle,
+            fontSize: textAny.fontSize
+          });
+        }
+      }
       canvas.calcOffset();
       canvas.requestRenderAll();
     };
@@ -2070,6 +2700,33 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         next.linethrough = Boolean(
           (target as unknown as { linethrough?: unknown }).linethrough
         );
+        const rawTextBackground = (target as unknown as { textBackgroundColor?: unknown })
+          .textBackgroundColor;
+        if (typeof rawTextBackground === "string") {
+          next.textBackgroundColor = rawTextBackground;
+        } else {
+          next.textBackgroundColor = null;
+        }
+        const rawMarkerColor = (target as unknown as { markerColor?: unknown }).markerColor;
+        if (typeof rawMarkerColor === "string") {
+          next.markerColor = rawMarkerColor;
+        } else if (typeof rawTextBackground === "string") {
+          next.markerColor = rawTextBackground;
+        } else {
+          next.markerColor = undefined;
+        }
+        const rawMarkerHeight = (target as unknown as { markerHeight?: unknown }).markerHeight;
+        if (typeof rawMarkerHeight === "number") {
+          next.markerHeight = clampNumberRange(rawMarkerHeight, 0.25, 1, DEFAULT_MARKER_HEIGHT);
+        } else {
+          next.markerHeight = undefined;
+        }
+        const rawMarkerAngle = (target as unknown as { markerAngle?: unknown }).markerAngle;
+        if (typeof rawMarkerAngle === "number") {
+          next.markerAngle = clampNumberRange(rawMarkerAngle, -15, 15, DEFAULT_MARKER_ANGLE);
+        } else {
+          next.markerAngle = undefined;
+        }
         const variant = getObjectVariant(target);
         if (variant) next.variant = variant;
 
@@ -2238,6 +2895,18 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       hideGuides();
       onModified(e);
     };
+    const onMouseDownBefore = (e: { e?: Event }) => {
+      const native = e?.e as MouseEvent | PointerEvent | undefined;
+      if (!native) return;
+      if (native.altKey) {
+        canvas.skipTargetFind = true;
+      } else {
+        canvas.skipTargetFind = false;
+      }
+    };
+    const onMouseUp = () => {
+      canvas.skipTargetFind = false;
+    };
 
     canvas.on("selection:created", emitSelection);
     canvas.on("selection:updated", emitSelection);
@@ -2346,6 +3015,8 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
     canvas.on("text:selection:changed", onSelectionChanged);
     canvas.on("text:editing:entered", onEditingEntered);
     canvas.on("text:editing:exited", onEditingExited);
+    canvas.on("mouse:down:before", onMouseDownBefore);
+    canvas.on("mouse:up", onMouseUp);
     return () => {
       canvas.off("selection:created", emitSelection);
       canvas.off("selection:updated", emitSelection);
@@ -2358,12 +3029,14 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
       canvas.off("text:selection:changed", onSelectionChanged);
       canvas.off("text:editing:entered", onEditingEntered);
       canvas.off("text:editing:exited", onEditingExited);
+      canvas.off("mouse:down:before", onMouseDownBefore);
+      canvas.off("mouse:up", onMouseUp);
       window.removeEventListener("keydown", onKeyDown);
       canvas.dispose();
       fabricRef.current = null;
     };
     // We intentionally don't depend on `slide` here; events use `slideRef`.
-  }, [scheduleToolbarUpdate, syncImageGroupAppearance, emit]);
+  }, [emit, queueFontReflow, scheduleToolbarUpdate, syncImageGroupAppearance]);
 
   const fitCanvas = React.useCallback(() => {
     const canvas = fabricRef.current;
@@ -2544,18 +3217,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 	                width,
 	                height,
 	                layoutManager: new LayoutManager(new FixedLayout()),
-	                objectCaching: false,
-	                selectable: true,
-	                evented: true,
-	                hasControls: true,
-	                hasBorders: true,
-                borderColor: "#7c3aed",
-                cornerStyle: "circle",
-                cornerColor: "#7c3aed",
-                transparentCorners: false,
-                lockRotation: true
-              });
-              (frame as unknown as { hasRotatingPoint?: boolean }).hasRotatingPoint = false;
+	                objectCaching: false
+	              });
+              configureImageFrameControls(frame);
               setObjectId(frame as unknown as FabricObject, id);
               setObjectKind(frame as unknown as FabricObject, "image");
               setImageMeta(frame as unknown as FabricObject, meta);
@@ -2641,6 +3305,30 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               )
             : rawStyleSnapshot;
 
+          const markerHeight = clampNumberRange(
+            raw.markerHeight,
+            0.25,
+            1,
+            DEFAULT_MARKER_HEIGHT
+          );
+          const markerAngle = clampNumberRange(
+            raw.markerAngle,
+            -15,
+            15,
+            DEFAULT_MARKER_ANGLE
+          );
+          const markerColor =
+            typeof raw.markerColor === "string"
+              ? raw.markerColor
+              : typeof raw.textBackgroundColor === "string"
+                ? raw.textBackgroundColor
+                : DEFAULT_MARKER_COLOR;
+          const textBackgroundColor =
+            typeof raw.textBackgroundColor === "string" ? raw.textBackgroundColor : null;
+          const resolvedWeight = resolveFontWeightForFamily(
+            raw.fontFamily,
+            clampNumber(raw.fontWeight, 600)
+          );
           const textbox = new Textbox(text, {
             left: x,
             top: y,
@@ -2651,7 +3339,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             // (cursor positioning depends on accurate glyph metrics).
             fontFamily: toFontStack(raw.fontFamily),
             fontSize: clampNumber(raw.fontSize, 56),
-            fontWeight: resolveFontWeightForFamily(raw.fontFamily, clampNumber(raw.fontWeight, 600)),
+            fontWeight: resolvedWeight,
             fill: raw.fill ?? "#111827",
             textAlign: raw.textAlign ?? "left",
             fontStyle: raw.fontStyle ?? "normal",
@@ -2669,9 +3357,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                 : 0,
             strokeLineJoin:
               typeof raw.strokeLineJoin === "string" ? raw.strokeLineJoin : "round",
+            textBackgroundColor: textBackgroundColor ?? undefined,
             styles: styleSnapshot ?? undefined,
             editable: true
           });
+          (textbox as unknown as { markerHeight?: number }).markerHeight = markerHeight;
+          (textbox as unknown as { markerAngle?: number }).markerAngle = markerAngle;
+          (textbox as unknown as { markerColor?: string }).markerColor = markerColor;
 
           setObjectId(textbox, id);
           const variantRaw =
@@ -2686,6 +3378,13 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
                     : "body";
           setObjectVariant(textbox, variantRaw);
           canvas.add(textbox);
+          queueFontReflow(textbox, {
+            fontFamily: raw.fontFamily,
+            fontWeight: resolvedWeight,
+            fontStyle: raw.fontStyle ?? "normal",
+            fontSize: clampNumber(raw.fontSize, 56),
+            token
+          });
         }
 
         fitCanvas();
@@ -2746,11 +3445,12 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       {textToolbar ? (
         <div
-          className="absolute z-40 flex items-center gap-1 rounded-2xl border bg-background/90 px-2 py-1 shadow-sm backdrop-blur"
+          className="absolute z-40 flex flex-col gap-1 rounded-2xl border bg-background/90 px-2 py-1 shadow-sm backdrop-blur"
           ref={textToolbarRef}
           style={{ left: textToolbar.left, top: textToolbar.top }}
         >
-          <select
+          <div className="flex flex-wrap items-center gap-1">
+            <select
             value={textToolbar.variant}
             onChange={(e) => {
               const variant = e.target.value as TextVariant;
@@ -2816,7 +3516,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             <option value="custom">Custom</option>
           </select>
 
-          <select
+            <select
             value={textToolbar.fontFamily}
             onChange={(e) => patchActiveText({ fontFamily: e.target.value })}
             className="rounded-lg border bg-background px-2 py-1 text-xs"
@@ -2829,7 +3529,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             ))}
           </select>
 
-          <input
+            <input
             type="number"
             min={1}
             max={140}
@@ -2862,7 +3562,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             title="Tamanho (px)"
           />
 
-          <input
+            <input
             type="number"
             min={0.8}
             max={2.5}
@@ -2902,7 +3602,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             title="Altura (linha)"
           />
 
-          <input
+            <input
             type="number"
             min={-10}
             max={30}
@@ -2942,15 +3642,17 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             title="Espaçamento (px)"
           />
 
-          <input
+            <input
             type="color"
             value={textToolbar.fill}
             onChange={(e) => patchActiveText({ fill: e.target.value })}
             className="h-8 w-10 cursor-pointer rounded-lg border bg-background p-1"
             title="Cor"
           />
+          </div>
 
-          <button
+          <div className="flex flex-wrap items-center gap-1">
+            <button
             type="button"
             onClick={() => {
               const bold = textToolbar.fontWeight >= 600;
@@ -2964,7 +3666,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             B
           </button>
-          <button
+            <button
             type="button"
             onClick={() => {
               patchActiveText({
@@ -2979,7 +3681,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             I
           </button>
-          <button
+            <button
             type="button"
             onClick={() => patchActiveText({ underline: !textToolbar.underline })}
             className={[
@@ -2990,7 +3692,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             U
           </button>
-          <button
+            <button
             type="button"
             onClick={() => patchActiveText({ linethrough: !textToolbar.linethrough })}
             className={[
@@ -3001,7 +3703,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             S
           </button>
-          <button
+            <button
             type="button"
             onClick={() => {
               const strokeOn =
@@ -3025,9 +3727,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             Ø
           </button>
 
-          <div className="mx-1 h-6 w-px bg-border" />
+            <div className="mx-1 h-6 w-px bg-border" />
 
-          <button
+            <button
             type="button"
             onClick={() => patchActiveText({ textAlign: "left" })}
             className={[
@@ -3038,7 +3740,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             ⟸
           </button>
-          <button
+            <button
             type="button"
             onClick={() => patchActiveText({ textAlign: "center" })}
             className={[
@@ -3049,7 +3751,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             ≡
           </button>
-          <button
+            <button
             type="button"
             onClick={() => patchActiveText({ textAlign: "right" })}
             className={[
@@ -3060,6 +3762,65 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
           >
             ⟹
           </button>
+
+            <div className="mx-1 h-6 w-px bg-border" />
+
+            <button
+            type="button"
+            onClick={() =>
+              patchActiveText({
+                textBackgroundColor: textToolbar.markerActive ? null : textToolbar.markerColor
+              })
+            }
+            className={[
+              "rounded-lg border bg-background px-2 py-1 text-xs hover:bg-secondary",
+              textToolbar.markerActive ? "border-primary" : ""
+            ].join(" ")}
+            title="Marca-texto"
+          >
+            ▰
+          </button>
+            <input
+            type="color"
+            value={textToolbar.markerColor}
+            onChange={(e) => patchActiveText({ markerColor: e.target.value })}
+            className="h-8 w-10 cursor-pointer rounded-lg border bg-background p-1"
+            title="Cor da marca"
+          />
+            <input
+            type="range"
+            min={0.25}
+            max={1}
+            step={0.05}
+            value={textToolbar.markerHeight}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (!Number.isFinite(n)) return;
+              patchActiveText({
+                markerHeight: clampNumberRange(n, 0.25, 1, textToolbar.markerHeight)
+              });
+            }}
+            className="w-[90px]"
+            title="Altura da marca"
+          />
+            <input
+            type="number"
+            min={-15}
+            max={15}
+            step={1}
+            inputMode="numeric"
+            value={Math.round(textToolbar.markerAngle)}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (!Number.isFinite(n)) return;
+              patchActiveText({
+                markerAngle: clampNumberRange(n, -15, 15, textToolbar.markerAngle)
+              });
+            }}
+            className="w-[58px] rounded-lg border bg-background px-2 py-1 text-xs"
+            title="Ângulo (°)"
+          />
+          </div>
         </div>
       ) : null}
 
@@ -3122,6 +3883,36 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             >
               G
             </button>
+          </div>
+
+          <div className="mx-1 h-6 w-px bg-border" />
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Filtro</span>
+            <input
+              type="color"
+              value={imageToolbar.filterColor}
+              onChange={(e) => patchActiveImage({ filterColor: e.target.value })}
+              className="h-8 w-10 cursor-pointer rounded-lg border bg-background p-1"
+              title="Cor do filtro"
+            />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={imageToolbar.filterOpacity}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (!Number.isFinite(n)) return;
+                patchActiveImage({ filterOpacity: clampNumberRange(n, 0, 1, 0) });
+              }}
+              className="w-[90px]"
+              title="Intensidade do filtro"
+            />
+            <span className="text-[10px] text-muted-foreground">
+              {Math.round(imageToolbar.filterOpacity * 100)}%
+            </span>
           </div>
 
           <div className="mx-1 h-6 w-px bg-border" />
