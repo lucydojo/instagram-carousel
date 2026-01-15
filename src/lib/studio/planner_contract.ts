@@ -56,7 +56,9 @@ const globalStyleSchema = z.object({
     .object({
       enabled: z.boolean(),
       opacity: z.number().min(0).max(1),
-      color: hexColorSchema.optional()
+      color: hexColorSchema.optional(),
+      mode: z.enum(["solid", "bottom-gradient"]).optional(),
+      height: z.number().min(0).max(1).optional()
     })
     .optional(),
   typography: z.object({

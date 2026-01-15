@@ -360,6 +360,10 @@ function resolveFontWeightForFamily(fontFamily: string | undefined, weight: numb
   return weight;
 }
 
+function normalizeLineJoin(value: unknown): CanvasLineJoin {
+  return value === "bevel" || value === "miter" || value === "round" ? value : "round";
+}
+
 function cloneTextStyles(styles: unknown): TextStyleMap | null {
   if (!styles || typeof styles !== "object") return null;
   try {
@@ -2108,8 +2112,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
             typeof o.strokeWidth === "number" && Number.isFinite(o.strokeWidth)
               ? o.strokeWidth
               : 0,
-          strokeLineJoin:
-            typeof o.strokeLineJoin === "string" ? o.strokeLineJoin : "round",
+          strokeLineJoin: normalizeLineJoin(o.strokeLineJoin),
           textBackgroundColor: textBackgroundColor ?? undefined,
           styles: styleSnapshot ?? undefined,
           editable: true
@@ -2937,7 +2940,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         | null;
       const target = e?.target as FabricObject | undefined;
       const native = e?.e as MouseEvent | PointerEvent | TouchEvent | undefined;
-      const findTarget = (canvas as unknown as { findTarget?: (evt: unknown) => unknown }).findTarget;
+      const findTarget = (canvas as unknown as {
+        findTarget?: (this: Canvas, evt: unknown) => unknown;
+      }).findTarget;
       const getScenePoint = (canvas as unknown as {
         getScenePoint?: (evt: unknown) => { x: number; y: number };
       }).getScenePoint;
@@ -2967,16 +2972,17 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
 
       if (isEditing && insideActive && !outsideSlide) return;
       const hasFinder = Boolean(native && typeof findTarget === "function");
-      const targetInfo = hasFinder
-        ? (findTarget.call(canvas, native) as
-            | {
-                currentTarget?: FabricObject;
-                target?: FabricObject;
-                currentContainer?: FabricObject;
-                container?: FabricObject;
-              }
-            | undefined)
-        : undefined;
+      const targetInfo =
+        native && typeof findTarget === "function"
+          ? (findTarget.call(canvas, native) as
+              | {
+                  currentTarget?: FabricObject;
+                  target?: FabricObject;
+                  currentContainer?: FabricObject;
+                  container?: FabricObject;
+                }
+              | undefined)
+          : undefined;
       const hitCandidate = hasFinder
         ? targetInfo?.currentTarget ??
           targetInfo?.target ??
@@ -3361,8 +3367,7 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
               typeof raw.strokeWidth === "number" && Number.isFinite(raw.strokeWidth)
                 ? raw.strokeWidth
                 : 0,
-            strokeLineJoin:
-              typeof raw.strokeLineJoin === "string" ? raw.strokeLineJoin : "round",
+            strokeLineJoin: normalizeLineJoin(raw.strokeLineJoin),
             textBackgroundColor: textBackgroundColor ?? undefined,
             styles: styleSnapshot ?? undefined,
             editable: true

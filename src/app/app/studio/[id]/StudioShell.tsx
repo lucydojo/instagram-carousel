@@ -47,6 +47,7 @@ import {
   type TemplateDataV1,
   type TemplateVisualV1
 } from "@/lib/studio/template_shared";
+import type { CarouselEditorState } from "@/lib/db/types";
 
 type Asset = {
   id: string;
@@ -1358,8 +1359,8 @@ export default function StudioShell(props: Props) {
               unknown
             >)
           : {};
-      const visualState = {
-        ...baseVisual,
+      const visualState: CarouselEditorState = {
+        ...(baseVisual as CarouselEditorState),
         version:
           typeof (baseVisual as { version?: unknown }).version === "number"
             ? (baseVisual as { version: number }).version
@@ -1371,7 +1372,7 @@ export default function StudioShell(props: Props) {
               templateData: layout
             }
           : baseGlobal
-      } as Record<string, unknown>;
+      };
 
       return {
         version: 2,
@@ -1650,7 +1651,7 @@ export default function StudioShell(props: Props) {
           if (shouldApply) {
             background.color = palette.background;
           }
-          const nextSlide = { ...slideObj, background, objects: nextObjects };
+          const nextSlide = { ...slideObj, background, objects: nextObjects } as SlideV1;
           if (scope === "slide" && idx === targetIndex) {
             nextSlide.paletteId = paletteId;
             nextSlide.paletteData = palette;

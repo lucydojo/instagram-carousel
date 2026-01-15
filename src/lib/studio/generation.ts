@@ -151,7 +151,7 @@ async function loadReferenceImages(input: {
     if (referenceKind !== "style" && referenceKind !== "content") {
       continue;
     }
-    const kind = referenceKind;
+    const kind = referenceKind as ReferenceImageInput["kind"];
 
     if (kind === "style" && style.length >= 10) continue;
     if (kind === "content" && content.length >= 10) continue;
@@ -169,7 +169,7 @@ async function loadReferenceImages(input: {
     const safeMimeType = normalizeImageMimeType(asset.mime_type, name);
     if (!safeMimeType) continue;
 
-    const entry = {
+    const entry: ReferenceImageInput = {
       mimeType: safeMimeType,
       data: base64,
       name,
@@ -830,7 +830,7 @@ export async function generateFirstDraftForCarousel(input: {
     return { ok: false as const, error: gen.error };
   }
 
-  let plan = gen.data;
+  let plan = plannerOutputSchema.parse(gen.data) as PlannerOutput;
   if (generationDebugEnabled()) {
     progressMeta.debug = {
       ...(typeof progressMeta.debug === "object" && progressMeta.debug
@@ -879,7 +879,7 @@ export async function generateFirstDraftForCarousel(input: {
     });
 
     if (review.ok) {
-      plan = review.data;
+      plan = plannerOutputSchema.parse(review.data) as PlannerOutput;
       if (generationDebugEnabled()) {
         progressMeta.debug = {
           ...(typeof progressMeta.debug === "object" && progressMeta.debug
@@ -925,6 +925,10 @@ export async function generateFirstDraftForCarousel(input: {
 
   const generatedAssets: Array<{ slideIndex: number; path: string }> = [];
 
+  const editorSlides = Array.isArray(editorState.slides)
+    ? (editorState.slides as Array<Record<string, unknown>>)
+    : [];
+
   const templateImageMap = new Map(template.images.map((img) => [img.id, img]));
 
   const appendImagePrompt = (base: string, extra: string[]) => {
@@ -940,11 +944,15 @@ export async function generateFirstDraftForCarousel(input: {
   };
 
   const assignAssetId = (slideIndex: number, slotId: string | undefined, assetId: string) => {
-    const slide = editorState.slides.find((s) => s.id === `slide_${slideIndex}`);
-    if (!slide || !slotId) return;
+    if (!slotId) return;
+    const slide = editorSlides.find(
+      (s) => s && typeof s === "object" && (s as { id?: unknown }).id === `slide_${slideIndex}`
+    ) as { objects?: Array<Record<string, unknown>> } | undefined;
+    if (!slide || !Array.isArray(slide.objects)) return;
     const imageObj = slide.objects.find(
-      (obj) => obj.type === "image" && obj.slotId === slotId
-    );
+      (obj: Record<string, unknown>) =>
+        obj.type === "image" && obj.slotId === slotId
+    ) as { assetId?: unknown } | undefined;
     if (imageObj) {
       imageObj.assetId = assetId;
     }
