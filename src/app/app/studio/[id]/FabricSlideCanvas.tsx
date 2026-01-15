@@ -473,7 +473,9 @@ function ensureTextboxMarkerPatch() {
       }
       const jlen = this._textLines[i].length;
       const lineLeftOffset = this._getLineLeftOffset(i);
-      const fullHeight = this.getHeightOfLineImpl(i);
+      const lineHeightScale =
+        typeof this.lineHeight === "number" && this.lineHeight > 0 ? this.lineHeight : 1;
+      const fullHeight = heightOfLine / lineHeightScale;
       const bgHeight = Math.max(1, fullHeight * markerHeight);
       const baseline = lineTopOffset + fullHeight - fullHeight * this._fontSizeFraction;
       const offsetY = baseline - bgHeight * (1 - this._fontSizeFraction);
