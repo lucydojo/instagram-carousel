@@ -443,9 +443,10 @@ function ensureTextboxMarkerPatch() {
       original.call(this, ctx);
       return;
     }
-    if (!this.textBackgroundColor && !this.styleHas("textBackgroundColor")) {
-      return;
-    }
+    const hasMarker =
+      Boolean(this.textBackgroundColor) ||
+      this._textLines.some((_, index) => this.styleHas("textBackgroundColor", index));
+    if (!hasMarker) return;
 
     const originalFill = ctx.fillStyle;
     const leftOffset = this._getLeftOffset();
