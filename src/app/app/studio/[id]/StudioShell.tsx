@@ -23,12 +23,14 @@ import {
 import {
   studioCleanup,
   studioCreatePalette,
+  studioCreateTemplate,
   studioDeletePalette,
   studioEditInline,
   studioGenerate,
   studioSaveEditorState,
   studioSaveEditorStateInline,
   studioSaveLocksInline,
+  studioUpdateTemplate,
   studioUploadReferences
 } from "./actions";
 import { MotionDock, MotionDockItem } from "./MotionDock";
@@ -36,6 +38,15 @@ import FabricSlideCanvas, {
   type FabricSlideCanvasHandle,
   type SlideV1
 } from "./FabricSlideCanvas";
+import {
+  BUILTIN_TEMPLATES,
+  extractTemplatePrompt,
+  isTemplateDataV1,
+  isTemplateVisualV1,
+  type Rect01,
+  type TemplateDataV1,
+  type TemplateVisualV1
+} from "@/lib/studio/template_shared";
 
 type Asset = {
   id: string;
@@ -160,47 +171,6 @@ type DockItem =
   | "locks"
   | "json";
 
-type Rect01 = { x: number; y: number; w: number; h: number };
-type TemplateDataV1 = {
-  version: 1;
-  id: string;
-  name: string;
-  slide: { width: 1080; height: 1080 };
-  zones: {
-    tagline?: Rect01;
-    title: Rect01;
-    body?: Rect01;
-    cta?: Rect01;
-    creator: Rect01;
-    swipe?: Rect01;
-  };
-  images: Array<
-    | { id: string; kind: "background"; bounds: Rect01; safeZones: Rect01[] }
-    | { id: string; kind: "slot"; bounds: Rect01; safeZones: Rect01[] }
-  >;
-  defaults: {
-    typography: {
-      fontFamily: string;
-      titleSize: number;
-      bodySize: number;
-      taglineSize?: number;
-      ctaSize?: number;
-      lineHeightTight?: number;
-      lineHeightNormal?: number;
-    };
-    spacing: { padding: number };
-    background: {
-      overlay?: {
-        enabled: boolean;
-        opacity: number;
-        color?: string;
-        mode?: "solid" | "bottom-gradient";
-        height?: number;
-      };
-    };
-  };
-};
-
 type PaletteV1 = { background: string; text: string; accent: string };
 
 const DEFAULT_PALETTE: PaletteV1 = {
@@ -249,89 +219,6 @@ type PaletteOption = {
   palette: PaletteV1;
 };
 
-const BUILTIN_TEMPLATES: TemplateDataV1[] = [
-  {
-    version: 1,
-    id: "builtin/background-overlay",
-    name: "Imagem de fundo + overlay",
-    slide: { width: 1080, height: 1080 },
-    zones: {
-      title: { x: 0.08, y: 0.2, w: 0.84, h: 0.22 },
-      body: { x: 0.08, y: 0.42, w: 0.7, h: 0.22 },
-      cta: { x: 0.08, y: 0.74, w: 0.6, h: 0.08 },
-      creator: { x: 0.06, y: 0.88, w: 0.6, h: 0.1 },
-      swipe: { x: 0.82, y: 0.88, w: 0.12, h: 0.08 }
-    },
-    images: [
-      {
-        id: "background",
-        kind: "background",
-        bounds: { x: 0, y: 0, w: 1, h: 1 },
-        safeZones: [
-          { x: 0.08, y: 0.2, w: 0.84, h: 0.22 },
-          { x: 0.08, y: 0.42, w: 0.7, h: 0.22 },
-          { x: 0.08, y: 0.74, w: 0.6, h: 0.08 },
-          { x: 0.06, y: 0.88, w: 0.6, h: 0.1 },
-          { x: 0.82, y: 0.88, w: 0.12, h: 0.08 }
-        ]
-      }
-    ],
-    defaults: {
-      typography: {
-        fontFamily: "Inter",
-        titleSize: 72,
-        bodySize: 34,
-        ctaSize: 28,
-        lineHeightTight: 1.1,
-        lineHeightNormal: 1.25
-      },
-      spacing: { padding: 80 },
-      background: {
-        overlay: {
-          enabled: true,
-          opacity: 0.35,
-          color: "#000000",
-          mode: "solid",
-          height: 0.6
-        }
-      }
-    }
-  },
-  {
-    version: 1,
-    id: "builtin/split-left-text-right-image",
-    name: "Split (texto à esquerda, imagem à direita)",
-    slide: { width: 1080, height: 1080 },
-    zones: {
-      title: { x: 0.08, y: 0.18, w: 0.4, h: 0.24 },
-      body: { x: 0.08, y: 0.42, w: 0.4, h: 0.26 },
-      cta: { x: 0.08, y: 0.74, w: 0.4, h: 0.08 },
-      creator: { x: 0.08, y: 0.88, w: 0.4, h: 0.1 },
-      swipe: { x: 0.84, y: 0.9, w: 0.12, h: 0.06 }
-    },
-    images: [
-      {
-        id: "hero",
-        kind: "slot",
-        bounds: { x: 0.52, y: 0.1, w: 0.4, h: 0.8 },
-        safeZones: [{ x: 0.84, y: 0.9, w: 0.12, h: 0.06 }]
-      }
-    ],
-    defaults: {
-      typography: {
-        fontFamily: "Inter",
-        titleSize: 64,
-        bodySize: 32,
-        ctaSize: 26,
-        lineHeightTight: 1.1,
-        lineHeightNormal: 1.25
-      },
-      spacing: { padding: 80 },
-      background: {}
-    }
-  }
-];
-
 type FontOption = { id: string; titleFont: string; bodyFont: string };
 
 const FONT_FAMILIES: Array<{ value: string; label: string }> = [
@@ -367,12 +254,6 @@ const FONT_PAIRS: FontOption[] = [
   { id: "rubik-rubik", titleFont: "Rubik", bodyFont: "Rubik" },
   { id: "spacemono-inter", titleFont: "Space Mono", bodyFont: "Inter" }
 ];
-
-function isTemplateDataV1(value: unknown): value is TemplateDataV1 {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, unknown>;
-  return v.version === 1 && typeof v.id === "string" && typeof v.name === "string";
-}
 
 function parsePaletteV1(value: unknown): PaletteV1 | null {
   if (!value || typeof value !== "object") return null;
@@ -981,14 +862,33 @@ export default function StudioShell(props: Props) {
     return byDefault?.id ?? props.creatorProfiles[0]?.id ?? null;
   }, [props.creatorProfiles]);
 
+  const [templateRecords, setTemplateRecords] = React.useState(props.templates);
+
+  React.useEffect(() => {
+    setTemplateRecords(props.templates);
+  }, [props.templates]);
+
+  const visualTemplateOptions = React.useMemo(() => {
+    return templateRecords
+      .map((t) => {
+        const payload = t.template_data;
+        if (!isTemplateVisualV1(payload)) return null;
+        return { ...t, template: payload as TemplateVisualV1 };
+      })
+      .filter(
+        (value): value is (typeof templateRecords)[number] & { template: TemplateVisualV1 } =>
+          Boolean(value)
+      );
+  }, [templateRecords]);
+
   const templateOptions = React.useMemo(() => {
-    const fromDb: TemplateDataV1[] = props.templates
+    const fromDb: TemplateDataV1[] = templateRecords
       .map((t) => t.template_data)
       .filter(isTemplateDataV1);
     const byId = new Map<string, TemplateDataV1>();
     for (const t of [...fromDb, ...BUILTIN_TEMPLATES]) byId.set(t.id, t);
     return Array.from(byId.values());
-  }, [props.templates]);
+  }, [templateRecords]);
 
   const selectedTemplateId =
     typeof currentGlobal.templateId === "string"
@@ -1209,10 +1109,48 @@ export default function StudioShell(props: Props) {
   }, [slidesFromState]);
 
   const [pendingTemplateId, setPendingTemplateId] = React.useState(selectedTemplateId);
+  const [selectedVisualTemplateId, setSelectedVisualTemplateId] = React.useState<string | null>(
+    visualTemplateOptions[0]?.id ?? null
+  );
+  const [newTemplateName, setNewTemplateName] = React.useState("");
+  const [newTemplatePrompt, setNewTemplatePrompt] = React.useState("");
+  const [templateStatus, setTemplateStatus] = React.useState<string | null>(null);
+  const [templateError, setTemplateError] = React.useState<string | null>(null);
+  const [templateBusy, setTemplateBusy] = React.useState(false);
+  const [templateNameDraft, setTemplateNameDraft] = React.useState("");
+  const [templatePromptDraft, setTemplatePromptDraft] = React.useState("");
 
   React.useEffect(() => {
     setPendingTemplateId(selectedTemplateId);
   }, [selectedTemplateId]);
+
+  React.useEffect(() => {
+    if (visualTemplateOptions.length === 0) {
+      setSelectedVisualTemplateId(null);
+      return;
+    }
+    if (
+      selectedVisualTemplateId &&
+      visualTemplateOptions.some((t) => t.id === selectedVisualTemplateId)
+    ) {
+      return;
+    }
+    setSelectedVisualTemplateId(visualTemplateOptions[0]?.id ?? null);
+  }, [selectedVisualTemplateId, visualTemplateOptions]);
+
+  const selectedVisualTemplate = React.useMemo(() => {
+    if (!selectedVisualTemplateId) return null;
+    return visualTemplateOptions.find((t) => t.id === selectedVisualTemplateId) ?? null;
+  }, [selectedVisualTemplateId, visualTemplateOptions]);
+
+  React.useEffect(() => {
+    const baseName = selectedVisualTemplate?.name ?? "";
+    const basePrompt = selectedVisualTemplate
+      ? extractTemplatePrompt(selectedVisualTemplate.template) ?? ""
+      : "";
+    setTemplateNameDraft(baseName);
+    setTemplatePromptDraft(basePrompt);
+  }, [selectedVisualTemplate?.id]);
 
   const applyTemplate = React.useCallback(
     (template: TemplateDataV1) => {
@@ -1398,6 +1336,195 @@ export default function StudioShell(props: Props) {
       selectedPalette
     ]
   );
+
+  const buildVisualTemplatePayload = React.useCallback(
+    (input: {
+      name: string;
+      prompt: string;
+      visualOverride?: Record<string, unknown>;
+      layoutOverride?: TemplateDataV1;
+      base?: TemplateVisualV1 | null;
+      syncLayout?: boolean;
+    }): TemplateVisualV1 => {
+      const name = input.name.trim();
+      const prompt = input.prompt.trim();
+      const baseVisual = input.visualOverride ?? (editorState as Record<string, unknown>);
+      const layout = input.layoutOverride ?? input.base?.layout ?? effectiveTemplate;
+      const shouldSyncLayout = input.syncLayout !== false;
+      const baseGlobal =
+        typeof (baseVisual as { global?: unknown }).global === "object"
+          ? ((baseVisual as { global: Record<string, unknown> }).global as Record<
+              string,
+              unknown
+            >)
+          : {};
+      const visualState = {
+        ...baseVisual,
+        version:
+          typeof (baseVisual as { version?: unknown }).version === "number"
+            ? (baseVisual as { version: number }).version
+            : 1,
+        global: shouldSyncLayout
+          ? {
+              ...baseGlobal,
+              templateId: layout.id,
+              templateData: layout
+            }
+          : baseGlobal
+      } as Record<string, unknown>;
+
+      return {
+        version: 2,
+        id: input.base?.id ?? createStudioId("template"),
+        name: name.length > 0 ? name : "Template sem nome",
+        layout,
+        visual: visualState,
+        prompt: prompt.length > 0 ? prompt : null
+      };
+    },
+    [editorState, effectiveTemplate]
+  );
+
+  const createVisualTemplate = React.useCallback(() => {
+    if (templateBusy) return;
+    const name = newTemplateName.trim();
+    if (name.length < 2) {
+      setTemplateError("Dê um nome para salvar o template.");
+      return;
+    }
+    const payload = buildVisualTemplatePayload({
+      name,
+      prompt: newTemplatePrompt
+    });
+    setTemplateBusy(true);
+    setTemplateError(null);
+    setTemplateStatus(null);
+    startTransition(async () => {
+      const res = await studioCreateTemplate({
+        name,
+        templateData: payload
+      });
+      if (!res.ok) {
+        setTemplateError(
+          res.error === "UNAUTHENTICATED"
+            ? "Você precisa entrar novamente."
+            : String(res.error ?? "Falha ao salvar template.")
+        );
+        setTemplateBusy(false);
+        return;
+      }
+      setTemplateRecords((prev) => [
+        { id: res.id, name, is_global: false, template_data: payload },
+        ...prev
+      ]);
+      setSelectedVisualTemplateId(res.id);
+      setNewTemplateName("");
+      setNewTemplatePrompt("");
+      setTemplateStatus("Template visual salvo.");
+      setTemplateBusy(false);
+    });
+  }, [
+    buildVisualTemplatePayload,
+    newTemplateName,
+    newTemplatePrompt,
+    startTransition,
+    templateBusy
+  ]);
+
+  const saveVisualTemplatePrompt = React.useCallback(() => {
+    if (templateBusy || !selectedVisualTemplate) return;
+    const name = templateNameDraft.trim() || selectedVisualTemplate.name;
+    const payload = buildVisualTemplatePayload({
+      name,
+      prompt: templatePromptDraft,
+      visualOverride: selectedVisualTemplate.template.visual,
+      base: selectedVisualTemplate.template,
+      syncLayout: false
+    });
+    setTemplateBusy(true);
+    setTemplateError(null);
+    setTemplateStatus(null);
+    startTransition(async () => {
+      const res = await studioUpdateTemplate({
+        id: selectedVisualTemplate.id,
+        name,
+        templateData: payload
+      });
+      if (!res.ok) {
+        setTemplateError(
+          res.error === "UNAUTHENTICATED"
+            ? "Você precisa entrar novamente."
+            : String(res.error ?? "Falha ao salvar prompt.")
+        );
+        setTemplateBusy(false);
+        return;
+      }
+      setTemplateRecords((prev) =>
+        prev.map((t) =>
+          t.id === selectedVisualTemplate.id
+            ? { ...t, name, template_data: payload }
+            : t
+        )
+      );
+      setTemplateStatus("Prompt atualizado.");
+      setTemplateBusy(false);
+    });
+  }, [
+    buildVisualTemplatePayload,
+    effectiveTemplate,
+    selectedVisualTemplate,
+    startTransition,
+    templateBusy,
+    templateNameDraft,
+    templatePromptDraft
+  ]);
+
+  const overwriteVisualTemplate = React.useCallback(() => {
+    if (templateBusy || !selectedVisualTemplate) return;
+    const name = templateNameDraft.trim() || selectedVisualTemplate.name;
+    const payload = buildVisualTemplatePayload({
+      name,
+      prompt: templatePromptDraft,
+      layoutOverride: effectiveTemplate,
+      base: selectedVisualTemplate.template
+    });
+    setTemplateBusy(true);
+    setTemplateError(null);
+    setTemplateStatus(null);
+    startTransition(async () => {
+      const res = await studioUpdateTemplate({
+        id: selectedVisualTemplate.id,
+        name,
+        templateData: payload
+      });
+      if (!res.ok) {
+        setTemplateError(
+          res.error === "UNAUTHENTICATED"
+            ? "Você precisa entrar novamente."
+            : String(res.error ?? "Falha ao atualizar template.")
+        );
+        setTemplateBusy(false);
+        return;
+      }
+      setTemplateRecords((prev) =>
+        prev.map((t) =>
+          t.id === selectedVisualTemplate.id
+            ? { ...t, name, template_data: payload }
+            : t
+        )
+      );
+      setTemplateStatus("Visual atualizado.");
+      setTemplateBusy(false);
+    });
+  }, [
+    buildVisualTemplatePayload,
+    effectiveTemplate,
+    selectedVisualTemplate,
+    startTransition,
+    templateBusy,
+    templateNameDraft,
+    templatePromptDraft
+  ]);
 
   const applyBranding = React.useCallback(
     (partial: Partial<BrandingConfig>) => {
@@ -4359,86 +4486,204 @@ export default function StudioShell(props: Props) {
                 ) : null}
 
                 {showTemplates ? (
-                  <div className="space-y-3">
-                    <div className="text-sm font-semibold">Templates</div>
-                    <div className="text-xs text-muted-foreground">
-                      Template define zonas e <span className="font-medium">slots de imagem</span>. No MVP, mostramos placeholders; imagens entram na próxima fase.
-                    </div>
-
-                    <div className="max-h-[420px] overflow-auto pr-1">
-                      <div className="grid grid-cols-2 gap-3">
-                        {templateOptions.map((t) => {
-                          const checked = t.id === pendingTemplateId;
-                          const slot = t.images.find((img) => img.kind === "slot") ?? null;
-                          const isBuiltin = t.id.startsWith("builtin/");
-                          return (
-                            <button
-                              key={t.id}
-                              type="button"
-                              onClick={() => {
-                                setPendingTemplateId(t.id);
-                                applyTemplate(t); // apply immediately (PostNitro-style)
-                              }}
-                              className={[
-                                "group rounded-2xl border bg-background/70 p-2 text-left shadow-sm transition hover:bg-secondary",
-                                checked ? "border-primary ring-1 ring-primary/30" : ""
-                              ].join(" ")}
-                            >
-                              <div className="relative aspect-square border bg-muted/40">
-                                {/* fake background */}
-                                <div className="absolute inset-0 bg-gradient-to-br from-muted/20 via-background to-muted/30" />
-
-                                {/* image slot */}
-                                {slot ? (
-                                  <div
-                                    className="absolute rounded-lg border border-dashed border-muted-foreground/50 bg-muted/20"
-                                    style={rectToPct(slot.bounds)}
-                                  />
-                                ) : null}
-
-                                {/* text zones */}
-                                <div
-                                  className="absolute rounded-md bg-foreground/10"
-                                  style={rectToPct(t.zones.title)}
-                                />
-                                {t.zones.body ? (
-                                  <div
-                                    className="absolute rounded-md bg-foreground/10"
-                                    style={rectToPct(t.zones.body)}
-                                  />
-                                ) : null}
-                                {t.zones.cta ? (
-                                  <div
-                                    className="absolute rounded-md bg-foreground/10"
-                                    style={rectToPct(t.zones.cta)}
-                                  />
-                                ) : null}
-                              </div>
-
-                              <div className="mt-2 flex items-start justify-between gap-2">
-                                <div>
-                                  <div className="text-sm font-semibold leading-tight">
-                                    {t.name}
-                                  </div>
-                                  <div className="mt-0.5 text-[11px] text-muted-foreground">
-                                    {isBuiltin ? "Built‑in" : "Custom"}
-                                  </div>
-                                </div>
-                                {checked ? (
-                                  <div className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                                    Ativo
-                                  </div>
-                                ) : null}
-                              </div>
-                            </button>
-                          );
-                        })}
+                  <div className="space-y-6">
+                    <section className="space-y-3 rounded-2xl border bg-background px-4 py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">Templates visuais</div>
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                          {visualTemplateOptions.length} salvos
+                        </span>
                       </div>
-                    </div>
+                      <div className="text-xs text-muted-foreground">
+                        Salve o carrossel atual para reutilizar o layout completo + estilos. O prompt define como preencher textos e imagens.
+                      </div>
+                      {templateError ? (
+                        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                          {templateError}
+                        </div>
+                      ) : null}
+                      {templateStatus ? (
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                          {templateStatus}
+                        </div>
+                      ) : null}
+                      <div className="space-y-2">
+                        <input
+                          className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                          placeholder="Nome do template"
+                          value={newTemplateName}
+                          onChange={(e) => setNewTemplateName(e.target.value)}
+                          disabled={templateBusy}
+                        />
+                        <textarea
+                          className="h-24 w-full rounded-xl border bg-background p-3 text-xs"
+                          placeholder="Prompt do template (ex: regras de texto e imagem por slide)"
+                          value={newTemplatePrompt}
+                          onChange={(e) => setNewTemplatePrompt(e.target.value)}
+                          disabled={templateBusy}
+                        />
+                        <button
+                          type="button"
+                          onClick={createVisualTemplate}
+                          disabled={templateBusy}
+                          className="w-full rounded-xl bg-foreground px-3 py-2 text-sm font-medium text-background hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {templateBusy ? "Salvando..." : "Salvar template atual"}
+                        </button>
+                      </div>
 
-                    <div className="text-[11px] text-muted-foreground">
-                      No MVP: reposicionamos apenas <span className="font-mono">title/body/cta/tagline</span> e adicionamos placeholders de imagem no <span className="font-mono">editor_state</span>.
-                    </div>
+                      {visualTemplateOptions.length > 0 ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-3">
+                            {visualTemplateOptions.map((t) => {
+                              const checked = t.id === selectedVisualTemplateId;
+                              return (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() => setSelectedVisualTemplateId(t.id)}
+                                  className={[
+                                    "rounded-2xl border bg-background/70 p-2 text-left shadow-sm transition hover:bg-secondary",
+                                    checked ? "border-primary ring-1 ring-primary/30" : ""
+                                  ].join(" ")}
+                                >
+                                  <div className="text-sm font-semibold leading-tight">{t.name}</div>
+                                  <div className="mt-1 text-[11px] text-muted-foreground">
+                                    Visual + prompt
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {selectedVisualTemplate ? (
+                            <div className="space-y-2 rounded-xl border bg-background/70 p-3">
+                              <div className="text-xs font-medium text-muted-foreground">
+                                Editar template selecionado
+                              </div>
+                              <input
+                                className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                                value={templateNameDraft}
+                                onChange={(e) => setTemplateNameDraft(e.target.value)}
+                                disabled={templateBusy}
+                              />
+                              <textarea
+                                className="h-24 w-full rounded-xl border bg-background p-3 text-xs"
+                                value={templatePromptDraft}
+                                onChange={(e) => setTemplatePromptDraft(e.target.value)}
+                                disabled={templateBusy}
+                              />
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={saveVisualTemplatePrompt}
+                                  disabled={templateBusy}
+                                  className="flex-1 rounded-xl border bg-background px-3 py-2 text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Salvar prompt
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={overwriteVisualTemplate}
+                                  disabled={templateBusy}
+                                  className="flex-1 rounded-xl border bg-background px-3 py-2 text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Atualizar visual
+                                </button>
+                              </div>
+                              <div className="text-[11px] text-muted-foreground">
+                                Prompt e visual podem ser ajustados separadamente.
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">
+                          Nenhum template visual salvo ainda.
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="space-y-3">
+                      <div className="text-sm font-semibold">Templates de layout</div>
+                      <div className="text-xs text-muted-foreground">
+                        Template define zonas e <span className="font-medium">slots de imagem</span>. No MVP, mostramos placeholders; imagens entram na próxima fase.
+                      </div>
+
+                      <div className="max-h-[420px] overflow-auto pr-1">
+                        <div className="grid grid-cols-2 gap-3">
+                          {templateOptions.map((t) => {
+                            const checked = t.id === pendingTemplateId;
+                            const slot = t.images.find((img) => img.kind === "slot") ?? null;
+                            const isBuiltin = t.id.startsWith("builtin/");
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  setPendingTemplateId(t.id);
+                                  applyTemplate(t); // apply immediately (PostNitro-style)
+                                }}
+                                className={[
+                                  "group rounded-2xl border bg-background/70 p-2 text-left shadow-sm transition hover:bg-secondary",
+                                  checked ? "border-primary ring-1 ring-primary/30" : ""
+                                ].join(" ")}
+                              >
+                                <div className="relative aspect-square border bg-muted/40">
+                                  <div className="absolute inset-0 bg-gradient-to-br from-muted/20 via-background to-muted/30" />
+
+                                  {slot ? (
+                                    <div
+                                      className="absolute rounded-lg border border-dashed border-muted-foreground/50 bg-muted/20"
+                                      style={rectToPct(slot.bounds)}
+                                    />
+                                  ) : null}
+
+                                  <div
+                                    className="absolute rounded-md bg-foreground/10"
+                                    style={rectToPct(t.zones.title)}
+                                  />
+                                  {t.zones.body ? (
+                                    <div
+                                      className="absolute rounded-md bg-foreground/10"
+                                      style={rectToPct(t.zones.body)}
+                                    />
+                                  ) : null}
+                                  {t.zones.cta ? (
+                                    <div
+                                      className="absolute rounded-md bg-foreground/10"
+                                      style={rectToPct(t.zones.cta)}
+                                    />
+                                  ) : null}
+                                </div>
+
+                                <div className="mt-2 flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="text-sm font-semibold leading-tight">
+                                      {t.name}
+                                    </div>
+                                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                      {isBuiltin ? "Built‑in" : "Custom"}
+                                    </div>
+                                  </div>
+                                  {checked ? (
+                                    <div className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                                      Ativo
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="text-[11px] text-muted-foreground">
+                        No MVP: reposicionamos apenas{" "}
+                        <span className="font-mono">title/body/cta/tagline</span> e adicionamos placeholders de imagem no{" "}
+                        <span className="font-mono">editor_state</span>.
+                      </div>
+                    </section>
                   </div>
                 ) : null}
 

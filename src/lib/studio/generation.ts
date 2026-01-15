@@ -16,7 +16,11 @@ import {
 } from "@/lib/studio/planner_contract";
 import {
   BUILTIN_TEMPLATES,
+  extractTemplateLayout,
+  extractTemplatePrompt,
+  extractTemplateVisual,
   isTemplateDataV1,
+  isTemplateVisualV1,
   type Rect01,
   type TemplateDataV1
 } from "@/lib/studio/templates";
@@ -28,6 +32,19 @@ const generationDebugEnabled = () =>
 
 const truncateText = (value: string, max = 220) =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
+
+function normalizeImageMimeType(mimeType: string | null, filename: string | null) {
+  const raw = typeof mimeType === "string" ? mimeType.trim().toLowerCase() : "";
+  if (raw.startsWith("image/") && raw !== "image/heic") return raw;
+  if (raw && raw !== "application/octet-stream") return null;
+  const name = typeof filename === "string" ? filename.toLowerCase() : "";
+  const ext = name.split(".").pop() ?? "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return null;
+}
 
 const summarizePlan = (plan: PlannerOutput) => ({
   version: plan.version,
@@ -85,6 +102,24 @@ function resolvePaletteFromDraft(draft: Record<string, unknown>) {
   return { background, text, accent };
 }
 
+function resolvePaletteFromVisual(visual: CarouselEditorState | null) {
+  if (!visual || typeof visual !== "object") return null;
+  const global =
+    visual.global && typeof visual.global === "object"
+      ? (visual.global as Record<string, unknown>)
+      : null;
+  const palette =
+    global && typeof global.paletteData === "object"
+      ? (global.paletteData as Record<string, unknown>)
+      : null;
+  const background =
+    palette && typeof palette.background === "string" ? palette.background : null;
+  const text = palette && typeof palette.text === "string" ? palette.text : null;
+  const accent = palette && typeof palette.accent === "string" ? palette.accent : null;
+  if (!background || !text || !accent) return null;
+  return { background, text, accent };
+}
+
 async function loadReferenceImages(input: {
   carouselId: string;
   workspaceId: string;
@@ -109,8 +144,14 @@ async function loadReferenceImages(input: {
 
   for (const asset of assets) {
     const metadata = (asset.metadata ?? {}) as Record<string, unknown>;
-    const kind =
-      metadata.reference_kind === "content" ? "content" : "style";
+    const referenceKind =
+      typeof metadata.reference_kind === "string"
+        ? metadata.reference_kind
+        : "";
+    if (referenceKind !== "style" && referenceKind !== "content") {
+      continue;
+    }
+    const kind = referenceKind;
 
     if (kind === "style" && style.length >= 10) continue;
     if (kind === "content" && content.length >= 10) continue;
@@ -125,9 +166,11 @@ async function loadReferenceImages(input: {
       data instanceof ArrayBuffer ? data : await data.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString("base64");
     const name = asset.storage_path.split("/").slice(-1)[0] ?? "reference";
+    const safeMimeType = normalizeImageMimeType(asset.mime_type, name);
+    if (!safeMimeType) continue;
 
     const entry = {
-      mimeType: asset.mime_type || "image/png",
+      mimeType: safeMimeType,
       data: base64,
       name,
       kind
@@ -143,24 +186,42 @@ async function loadReferenceImages(input: {
   return { style, content };
 }
 
-async function resolveTemplateData(input: {
+type TemplateBundle = {
+  layout: TemplateDataV1;
+  prompt: string | null;
+  visual: CarouselEditorState | null;
+};
+
+async function resolveTemplateBundle(input: {
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
   templateId?: string | null;
-}) {
+}): Promise<TemplateBundle> {
   const fallback = BUILTIN_TEMPLATES[0]!;
+  const empty = { layout: fallback, prompt: null, visual: null };
   const templateId = typeof input.templateId === "string" ? input.templateId.trim() : "";
-  if (!templateId) return fallback;
+  if (!templateId) return empty;
 
   const builtin = BUILTIN_TEMPLATES.find((t) => t.id === templateId);
-  if (builtin) return builtin;
+  if (builtin) return { layout: builtin, prompt: null, visual: null };
 
   const { data, error } = await input.supabase
     .from("carousel_templates")
     .select("template_data")
     .eq("id", templateId)
     .maybeSingle();
-  if (error || !data) return fallback;
-  return isTemplateDataV1(data.template_data) ? data.template_data : fallback;
+  if (error || !data) return empty;
+  const templateData = data.template_data;
+  if (isTemplateDataV1(templateData)) {
+    return { layout: templateData, prompt: null, visual: null };
+  }
+  if (isTemplateVisualV1(templateData)) {
+    return {
+      layout: extractTemplateLayout(templateData) ?? fallback,
+      prompt: extractTemplatePrompt(templateData),
+      visual: extractTemplateVisual(templateData)
+    };
+  }
+  return empty;
 }
 
 function buildPlannerPrompt(input: {
@@ -171,6 +232,7 @@ function buildPlannerPrompt(input: {
   targetAudience?: string;
   language?: string;
   template: TemplateDataV1;
+  templatePrompt?: string | null;
   palette?: { background: string; text: string; accent: string } | null;
   creator?: { enabled: boolean; name?: string; handle?: string; role?: string };
   styleReferences: ReferenceImageInput[];
@@ -240,8 +302,13 @@ function buildPlannerPrompt(input: {
     "Referências visuais (imagens) serão anexadas após o texto.",
     "Use as referências de estilo conforme o nível de similaridade pedido.",
     "Não copie conteúdo literal de referências.",
+    input.templatePrompt
+      ? "Siga as instruções em `templateInstructions` para preencher textos e imagens."
+      : null,
     schemaGuide
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const similarity = Number.isFinite(input.similarity)
     ? Math.max(0, Math.min(100, Math.round(input.similarity ?? 70)))
@@ -276,6 +343,7 @@ function buildPlannerPrompt(input: {
       templateData: input.template,
       spacing: { padding: input.template.defaults.spacing.padding }
     },
+    templateInstructions: input.templatePrompt ?? null,
     style: {
       palette: input.palette ?? null,
       overlay: input.template.defaults.background.overlay ?? null,
@@ -299,7 +367,9 @@ function buildPlannerPrompt(input: {
     },
     constraints: {
       allowedFonts: ["Inter", "Poppins", "Lora", "Merriweather", "Montserrat", "Manrope"],
-      templates: BUILTIN_TEMPLATES.map((t) => t.id),
+      templates: Array.from(
+        new Set([...BUILTIN_TEMPLATES.map((t) => t.id), input.template.id])
+      ),
       imageModels: {
         default: GEMINI_IMAGE_MODELS.NANO_BANANA,
         withText: GEMINI_IMAGE_MODELS.NANO_BANANA_PRO
@@ -371,6 +441,24 @@ function toEditorStateFromPlan(input: {
     cta: template.zones.cta
   };
 
+  const overlaySource =
+    plan.globalStyle.backgroundOverlay ?? template.defaults.background.overlay;
+  const overlay = overlaySource
+    ? {
+        enabled: Boolean(overlaySource.enabled),
+        opacity: overlaySource.opacity ?? 0.35,
+        color: overlaySource.color ?? "#000000",
+        mode: overlaySource.mode === "bottom-gradient" ? "bottom-gradient" : "solid",
+        height: overlaySource.height ?? 0.6
+      }
+    : {
+        enabled: false,
+        opacity: 0.35,
+        color: "#000000",
+        mode: "solid",
+        height: 0.6
+      };
+
   const slides = plan.slides.map((s) => {
     const objects: Array<Record<string, unknown>> = [];
     const addText = (key: "tagline" | "title" | "body" | "cta", text?: string) => {
@@ -421,15 +509,6 @@ function toEditorStateFromPlan(input: {
       });
     }
 
-  const overlaySource = plan.globalStyle.backgroundOverlay ?? template.defaults.background.overlay;
-  const overlay = overlaySource
-    ? {
-        enabled: Boolean(overlaySource.enabled),
-        opacity: overlaySource.opacity ?? 0.35,
-        color: overlaySource.color ?? "#000000"
-      }
-    : { enabled: false, opacity: 0.35, color: "#000000" };
-
     return {
       id: `slide_${s.index}`,
       width: slideW,
@@ -456,9 +535,124 @@ function toEditorStateFromPlan(input: {
         taglineSize,
         ctaSize
       },
-      background: { overlay: template.defaults.background.overlay ?? null }
+      background: { overlay }
     },
     slides
+  };
+}
+
+function applyPlanToVisualTemplate(input: {
+  plan: PlannerOutput;
+  template: TemplateDataV1;
+  visual: CarouselEditorState;
+}): CarouselEditorState {
+  const fallbackState = toEditorStateFromPlan({ plan: input.plan, template: input.template });
+  const base = JSON.parse(JSON.stringify(input.visual)) as CarouselEditorState;
+  const baseSlides = Array.isArray(base.slides) ? base.slides : [];
+  const fallbackSlides = Array.isArray(fallbackState.slides) ? fallbackState.slides : [];
+  const planSlides = input.plan.slides ?? [];
+
+  const templateSlotIds = new Set(input.template.images.map((img) => img.id));
+
+  const nextSlides = fallbackSlides.map((fallbackSlide, index) => {
+    const baseSlide =
+      index < baseSlides.length && baseSlides[index] && typeof baseSlides[index] === "object"
+        ? (baseSlides[index] as Record<string, unknown>)
+        : null;
+    const fallback = fallbackSlide as Record<string, unknown>;
+    const slide = baseSlide ? { ...fallback, ...baseSlide } : { ...fallback };
+
+    const baseObjects = Array.isArray((slide as Record<string, unknown>).objects)
+      ? ([...(slide as Record<string, unknown>).objects as Record<string, unknown>[]] as Record<
+          string,
+          unknown
+        >[])
+      : [];
+    const fallbackObjects = Array.isArray(fallback.objects)
+      ? ([...(fallback.objects as Record<string, unknown>[])] as Record<string, unknown>[])
+      : [];
+    const objects = baseObjects.length > 0 ? baseObjects : fallbackObjects;
+
+    const planSlide =
+      planSlides.find((s) => s.index === index + 1) ?? planSlides[index] ?? null;
+
+    const textMap = planSlide
+      ? {
+          tagline: planSlide.text.tagline ?? null,
+          title: planSlide.text.title ?? null,
+          body: planSlide.text.body ?? null,
+          cta: planSlide.text.cta ?? null
+        }
+      : null;
+
+    const planSlotIds = new Set(
+      (planSlide?.images ?? [])
+        .map((img) => (typeof img.slotId === "string" ? img.slotId : null))
+        .filter((slotId): slotId is string => Boolean(slotId))
+    );
+
+    const nextObjects = objects.map((obj) => {
+      if (!obj || typeof obj !== "object") return obj;
+      if (obj.type === "text") {
+        const variant =
+          typeof obj.variant === "string"
+            ? obj.variant
+            : typeof obj.id === "string"
+              ? obj.id
+              : null;
+        if (!variant || !textMap || !(variant in textMap)) return obj;
+        const nextText = textMap[variant as keyof typeof textMap];
+        if (typeof nextText === "string" && nextText.trim().length > 0) {
+          return { ...obj, text: nextText, hidden: false };
+        }
+        return { ...obj, text: "", hidden: true };
+      }
+      if (obj.type === "image") {
+        const rawId = typeof obj.id === "string" ? obj.id : null;
+        const rawSlotId = typeof obj.slotId === "string" ? obj.slotId : null;
+        const derivedSlot =
+          rawSlotId ??
+          (rawId && rawId.startsWith("image_") ? rawId.slice("image_".length) : rawId);
+        if (!derivedSlot || !templateSlotIds.has(derivedSlot)) return obj;
+        const shouldReset = planSlotIds.has(derivedSlot) || templateSlotIds.has(derivedSlot);
+        return {
+          ...obj,
+          slotId: derivedSlot,
+          assetId: shouldReset ? null : (obj as { assetId?: unknown }).assetId
+        };
+      }
+      return obj;
+    });
+
+    if (templateSlotIds.size > 0) {
+      const existingSlots = new Set(
+        nextObjects
+          .filter((obj) => obj.type === "image" && typeof obj.slotId === "string")
+          .map((obj) => obj.slotId as string)
+      );
+      for (const fallbackObj of fallbackObjects) {
+        if (fallbackObj.type !== "image") continue;
+        const slotId = typeof fallbackObj.slotId === "string" ? fallbackObj.slotId : null;
+        if (!slotId || !templateSlotIds.has(slotId) || existingSlots.has(slotId)) continue;
+        nextObjects.push({ ...fallbackObj, assetId: null });
+        existingSlots.add(slotId);
+      }
+    }
+
+    return { ...slide, objects: nextObjects };
+  });
+
+  const nextGlobal = {
+    ...(base.global && typeof base.global === "object" ? base.global : {}),
+    templateId: input.template.id,
+    templateData: input.template
+  } as Record<string, unknown>;
+
+  return {
+    ...base,
+    version: base.version ?? 1,
+    global: nextGlobal,
+    slides: nextSlides
   };
 }
 
@@ -523,7 +717,7 @@ export async function generateFirstDraftForCarousel(input: {
         ? "prompt"
         : "topic";
 
-  const template = await resolveTemplateData({
+  const templateBundle = await resolveTemplateBundle({
     supabase,
     templateId:
       typeof draft.templateId === "string"
@@ -533,11 +727,21 @@ export async function generateFirstDraftForCarousel(input: {
           : undefined
   });
 
-  const palette = resolvePaletteFromDraft(draft);
+  const template = templateBundle.layout;
+  const visualTemplate = templateBundle.visual;
+  const templatePrompt = templateBundle.prompt;
+
+  const palette = resolvePaletteFromDraft(draft) ?? resolvePaletteFromVisual(visualTemplate);
   const referenceSimilarityRaw = Number(draft.referenceSimilarity ?? 70);
   const referenceSimilarity = Number.isFinite(referenceSimilarityRaw)
     ? Math.max(0, Math.min(100, Math.round(referenceSimilarityRaw)))
     : 70;
+
+  const visualSlidesCount = Array.isArray(visualTemplate?.slides)
+    ? visualTemplate?.slides?.length ?? 0
+    : 0;
+  const effectiveSlidesCount =
+    visualSlidesCount > 0 ? visualSlidesCount : slidesCount;
 
   const { style: styleReferences, content: contentReferences } = await loadReferenceImages({
     carouselId: carousel.id,
@@ -569,13 +773,14 @@ export async function generateFirstDraftForCarousel(input: {
 
   const { system, user } = buildPlannerPrompt({
     topicOrPrompt,
-    slidesCount,
+    slidesCount: effectiveSlidesCount,
     inputMode,
     tone: typeof draft.tone === "string" ? draft.tone : undefined,
     targetAudience:
       typeof draft.targetAudience === "string" ? draft.targetAudience : undefined,
     language: typeof draft.language === "string" ? draft.language : undefined,
     template,
+    templatePrompt,
     palette,
     creator:
       draft.creatorInfo && typeof draft.creatorInfo === "object"
@@ -714,7 +919,9 @@ export async function generateFirstDraftForCarousel(input: {
     .update({ generation_meta: progressMeta })
     .eq("id", carouselId);
 
-  const editorState = toEditorStateFromPlan({ plan, template });
+  const editorState = visualTemplate
+    ? applyPlanToVisualTemplate({ plan, template, visual: visualTemplate })
+    : toEditorStateFromPlan({ plan, template });
 
   const generatedAssets: Array<{ slideIndex: number; path: string }> = [];
 

@@ -8,11 +8,13 @@ import { createSignedUrl } from "@/lib/studio/storage";
 import {
   applyNaturalLanguageEdit,
   cleanupPlaceholderGeneratedAssets,
+  createCarouselTemplate,
   createUserPalette,
   deleteUserPalette,
   generateFirstDraft,
   saveCarouselElementLocksFromForm,
-  saveCarouselEditorStateFromForm
+  saveCarouselEditorStateFromForm,
+  updateCarouselTemplate
 } from "@/lib/studio/actions";
 
 function getCarouselId(formData: FormData): string {
@@ -93,6 +95,26 @@ export async function studioCreatePalette(input: {
 
 export async function studioDeletePalette(input: { id: string }) {
   return await deleteUserPalette(input);
+}
+
+export async function studioCreateTemplate(input: {
+  name: string;
+  templateData: Record<string, unknown>;
+  isGlobal?: boolean;
+}) {
+  return await createCarouselTemplate({
+    name: input.name,
+    templateData: input.templateData,
+    isGlobal: input.isGlobal
+  });
+}
+
+export async function studioUpdateTemplate(input: {
+  id: string;
+  name?: string;
+  templateData?: Record<string, unknown>;
+}) {
+  return await updateCarouselTemplate(input);
 }
 
 export async function studioUploadReferences(formData: FormData) {

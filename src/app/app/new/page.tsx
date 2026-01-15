@@ -6,6 +6,13 @@ import { createSupabaseAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { getLocale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 import { generateFirstDraftForCarousel } from "@/lib/studio/generation";
+import {
+  BUILTIN_TEMPLATES,
+  extractTemplatePrompt,
+  isTemplateDataV1,
+  isTemplateVisualV1
+} from "@/lib/studio/template_shared";
+import NewCarouselForm from "./NewCarouselForm";
 
 const newCarouselSchema = z.object({
   inputMode: z.enum(["topic", "prompt"]),
@@ -14,10 +21,15 @@ const newCarouselSchema = z.object({
   slidesCount: z.coerce.number().int().min(2).max(10),
   platform: z.literal("instagram"),
   tone: z.string().optional(),
+  tonePreset: z.string().optional(),
+  toneCustom: z.string().optional(),
   targetAudience: z.string().optional(),
+  audiencePreset: z.string().optional(),
+  audienceCustom: z.string().optional(),
   language: z.string().optional(),
   templateId: z.string().optional(),
   presetId: z.string().optional(),
+  paletteId: z.string().optional(),
   creatorEnabled: z.coerce.boolean().optional(),
   creatorName: z.string().optional(),
   creatorHandle: z.string().optional(),
@@ -28,26 +40,54 @@ const newCarouselSchema = z.object({
   referenceSimilarity: z.coerce.number().int().min(0).max(100).optional()
 });
 
-const MAX_REFERENCE_BYTES = 500 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+const CUSTOM_PALETTE_ID = "__custom__";
+const CUSTOM_INPUT_VALUE = "__custom__";
 
-async function uploadReferenceFiles(input: {
+type PaletteV1 = { background: string; text: string; accent: string };
+
+function parsePaletteV1(value: unknown): PaletteV1 | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const background = typeof v.background === "string" ? v.background : null;
+  const text = typeof v.text === "string" ? v.text : null;
+  const accent = typeof v.accent === "string" ? v.accent : null;
+  if (!background || !text || !accent) return null;
+  return { background, text, accent };
+}
+
+function resolveImageMimeType(file: File) {
+  const raw = file.type?.trim().toLowerCase() ?? "";
+  if (raw.startsWith("image/") && raw !== "image/heic") return raw;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return null;
+}
+
+async function uploadAssetFiles(input: {
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
   carouselId: string;
   workspaceId: string;
   ownerId: string;
   files: File[];
-  kind: "style" | "content";
 }) {
   const admin = createSupabaseAdminClientIfAvailable();
   const storageClient = admin ?? input.supabase;
 
   for (const file of input.files) {
+    const mimeType = resolveImageMimeType(file);
+    if (!mimeType) {
+      throw new Error("Envie apenas imagens (png, jpg, webp ou gif).");
+    }
     const ext = file.name.split(".").pop() || "bin";
     const path = `workspaces/${input.workspaceId}/carousels/${input.carouselId}/reference/${crypto.randomUUID()}.${ext}`;
 
     const { error: uploadError } = await storageClient.storage
       .from("carousel-assets")
-      .upload(path, file, { upsert: false, contentType: file.type });
+      .upload(path, file, { upsert: false, contentType: mimeType });
 
     if (uploadError) {
       throw new Error(uploadError.message);
@@ -62,9 +102,10 @@ async function uploadReferenceFiles(input: {
         asset_type: "reference",
         storage_bucket: "carousel-assets",
         storage_path: path,
-        mime_type: file.type,
+        mime_type: mimeType,
         metadata: {
-          reference_kind: input.kind
+          reference_kind: "upload",
+          source: "user_upload"
         }
       });
 
@@ -91,20 +132,17 @@ async function createCarousel(formData: FormData) {
     redirect("/app");
   }
 
-  const styleFilesRaw = formData
-    .getAll("styleReferences")
-    .filter((f): f is File => f instanceof File);
-  const contentFilesRaw = formData
-    .getAll("contentReferences")
-    .filter((f): f is File => f instanceof File);
-  const totalReferenceBytes = [...styleFilesRaw, ...contentFilesRaw].reduce(
+  const assetFilesRaw = formData
+    .getAll("assetUploads")
+    .filter((f): f is File => f instanceof File && f.size > 0);
+  const totalUploadBytes = [...assetFilesRaw].reduce(
     (sum, file) => sum + file.size,
     0
   );
-  if (totalReferenceBytes > MAX_REFERENCE_BYTES) {
+  if (totalUploadBytes > MAX_UPLOAD_BYTES) {
     redirect(
       `/app/new?error=${encodeURIComponent(
-        "As referências excedem 500MB. Reduza o tamanho das imagens."
+        "Os uploads excedem 500MB. Reduza o tamanho das imagens."
       )}`
     );
   }
@@ -116,8 +154,20 @@ async function createCarousel(formData: FormData) {
     slidesCount: formData.get("slidesCount"),
     platform: "instagram",
     tone: formData.get("tone") ? String(formData.get("tone")) : undefined,
+    tonePreset: formData.get("tonePreset")
+      ? String(formData.get("tonePreset"))
+      : undefined,
+    toneCustom: formData.get("toneCustom")
+      ? String(formData.get("toneCustom"))
+      : undefined,
     targetAudience: formData.get("targetAudience")
       ? String(formData.get("targetAudience"))
+      : undefined,
+    audiencePreset: formData.get("audiencePreset")
+      ? String(formData.get("audiencePreset"))
+      : undefined,
+    audienceCustom: formData.get("audienceCustom")
+      ? String(formData.get("audienceCustom"))
       : undefined,
     language: formData.get("language")
       ? String(formData.get("language"))
@@ -128,7 +178,10 @@ async function createCarousel(formData: FormData) {
     presetId: formData.get("presetId")
       ? String(formData.get("presetId"))
       : undefined,
-    creatorEnabled: formData.get("creatorEnabled") ? true : false,
+    paletteId: formData.get("paletteId")
+      ? String(formData.get("paletteId"))
+      : undefined,
+    creatorEnabled: formData.get("creatorEnabled") ? true : undefined,
     creatorName: formData.get("creatorName")
       ? String(formData.get("creatorName"))
       : undefined,
@@ -157,11 +210,103 @@ async function createCarousel(formData: FormData) {
   }
 
   const values = parsed.data;
-  const hasTopic = typeof values.topic === "string" && values.topic.trim().length > 0;
-  const hasPrompt = typeof values.prompt === "string" && values.prompt.trim().length > 0;
+  let paletteBackground =
+    values.paletteId === CUSTOM_PALETTE_ID ? values.paletteBackground : undefined;
+  let paletteText =
+    values.paletteId === CUSTOM_PALETTE_ID ? values.paletteText : undefined;
+  let paletteAccent =
+    values.paletteId === CUSTOM_PALETTE_ID ? values.paletteAccent : undefined;
+  let templateSlidesCount: number | null = null;
+  let templatePalette: PaletteV1 | null = null;
+  let templatePrompt: string | null = null;
+
+  if (values.templateId) {
+    const builtin = BUILTIN_TEMPLATES.find((t) => t.id === values.templateId);
+    if (!builtin) {
+      const { data: templateRow } = await supabase
+        .from("carousel_templates")
+        .select("template_data")
+        .eq("id", values.templateId)
+        .maybeSingle();
+      if (templateRow && isTemplateVisualV1(templateRow.template_data)) {
+        templatePrompt = extractTemplatePrompt(templateRow.template_data);
+        const data = templateRow.template_data as {
+          visual?: { slides?: unknown[]; global?: Record<string, unknown> };
+        };
+        templateSlidesCount = Array.isArray(data.visual?.slides)
+          ? data.visual?.slides?.length ?? null
+          : null;
+        templatePalette = parsePaletteV1(
+          data.visual && typeof data.visual.global === "object"
+            ? (data.visual.global as Record<string, unknown>).paletteData
+            : null
+        );
+      }
+    }
+  }
+
+  const toneCustom =
+    typeof values.toneCustom === "string" ? values.toneCustom.trim() : "";
+  const tonePresetRaw =
+    typeof values.tonePreset === "string" ? values.tonePreset.trim() : "";
+  const tonePreset =
+    tonePresetRaw.length > 0 && tonePresetRaw !== CUSTOM_INPUT_VALUE
+      ? tonePresetRaw
+      : "";
+  const tone = toneCustom.length > 0 ? toneCustom : tonePreset || values.tone;
+
+  const audienceCustom =
+    typeof values.audienceCustom === "string" ? values.audienceCustom.trim() : "";
+  const audiencePresetRaw =
+    typeof values.audiencePreset === "string" ? values.audiencePreset.trim() : "";
+  const audiencePreset =
+    audiencePresetRaw.length > 0 && audiencePresetRaw !== CUSTOM_INPUT_VALUE
+      ? audiencePresetRaw
+      : "";
+  const targetAudience =
+    audienceCustom.length > 0 ? audienceCustom : audiencePreset || values.targetAudience;
+
+  if ((!values.paletteId || values.paletteId === "") && templatePalette) {
+    paletteBackground = templatePalette.background;
+    paletteText = templatePalette.text;
+    paletteAccent = templatePalette.accent;
+  }
+
+  if (values.paletteId && values.paletteId !== CUSTOM_PALETTE_ID) {
+    const { data: paletteRow } = await supabase
+      .from("palettes")
+      .select("palette_data")
+      .eq("id", values.paletteId)
+      .maybeSingle();
+    const parsedPalette = parsePaletteV1(paletteRow?.palette_data);
+    if (parsedPalette) {
+      paletteBackground = parsedPalette.background;
+      paletteText = parsedPalette.text;
+      paletteAccent = parsedPalette.accent;
+    }
+  }
+
+  const creatorEnabled =
+    typeof values.creatorEnabled === "boolean" ? values.creatorEnabled : true;
+  const slidesCount = templateSlidesCount ?? values.slidesCount;
+  const topicValue =
+    typeof values.topic === "string" ? values.topic.trim() : "";
+  const promptValue =
+    typeof values.prompt === "string" ? values.prompt.trim() : "";
+  let resolvedPrompt = promptValue;
+
+  if (values.inputMode === "prompt" && !resolvedPrompt && templatePrompt) {
+    resolvedPrompt = templatePrompt;
+  }
+
+  if (values.inputMode === "prompt" && resolvedPrompt && topicValue) {
+    const separator = resolvedPrompt.endsWith("\n") ? "\n" : "\n\n";
+    resolvedPrompt = `${resolvedPrompt}${separator}Assunto: ${topicValue}`;
+  }
+
   if (
-    (values.inputMode === "topic" && !hasTopic) ||
-    (values.inputMode === "prompt" && !hasPrompt)
+    (values.inputMode === "topic" && topicValue.length === 0) ||
+    (values.inputMode === "prompt" && resolvedPrompt.length === 0)
   ) {
     redirect(
       `/app/new?error=${encodeURIComponent("Informe um tema ou prompt válido.")}`
@@ -171,24 +316,24 @@ async function createCarousel(formData: FormData) {
   const draft: CarouselDraft = {
     inputMode: values.inputMode,
     topic: values.topic,
-    prompt: values.prompt,
-    slidesCount: values.slidesCount,
+    prompt: values.inputMode === "prompt" ? resolvedPrompt : values.prompt,
+    slidesCount,
     platform: values.platform,
-    tone: values.tone,
-    targetAudience: values.targetAudience,
+    tone,
+    targetAudience,
     language: values.language,
     presetId: values.presetId,
     templateId: values.templateId,
     creatorInfo: {
-      enabled: Boolean(values.creatorEnabled),
+      enabled: creatorEnabled,
       name: values.creatorName,
       handle: values.creatorHandle,
       role: values.creatorRole
     },
     palette: {
-      background: values.paletteBackground,
-      text: values.paletteText,
-      accent: values.paletteAccent
+      background: paletteBackground,
+      text: paletteText,
+      accent: paletteAccent
     },
     referenceSimilarity: values.referenceSimilarity
   };
@@ -210,28 +355,16 @@ async function createCarousel(formData: FormData) {
     );
   }
 
-  const styleFiles = styleFilesRaw.slice(0, 10);
-  const contentFiles = contentFilesRaw.slice(0, 10);
+  const assetFiles = assetFilesRaw.slice(0, 12);
 
   try {
-    if (styleFiles.length > 0) {
-      await uploadReferenceFiles({
+    if (assetFiles.length > 0) {
+      await uploadAssetFiles({
         supabase,
         carouselId: created.id,
         workspaceId: membership.workspace_id,
         ownerId: userData.user.id,
-        files: styleFiles,
-        kind: "style"
-      });
-    }
-    if (contentFiles.length > 0) {
-      await uploadReferenceFiles({
-        supabase,
-        carouselId: created.id,
-        workspaceId: membership.workspace_id,
-        ownerId: userData.user.id,
-        files: contentFiles,
-        kind: "content"
+        files: assetFiles
       });
     }
   } catch (err) {
@@ -262,250 +395,133 @@ export default async function NewCarouselPage({
   const params = await searchParams;
   const error = params?.error ? decodeURIComponent(params.error) : null;
   const defaultDraftLanguage = locale === "pt-BR" ? "Português (Brasil)" : "English";
+  const supabase = await createSupabaseServerClient();
+
+  const [
+    tonesResult,
+    audiencesResult,
+    palettesResult,
+    templatesResult,
+    presetsResult
+  ] = await Promise.all([
+    supabase
+      .from("tones")
+      .select("id, name, is_global")
+      .order("is_global", { ascending: false })
+      .order("name", { ascending: true }),
+    supabase
+      .from("audiences")
+      .select("id, name, is_global")
+      .order("is_global", { ascending: false })
+      .order("name", { ascending: true }),
+    supabase
+      .from("palettes")
+      .select("id, name, is_global, palette_data")
+      .order("is_global", { ascending: false })
+      .order("name", { ascending: true }),
+    supabase
+      .from("carousel_templates")
+      .select("id, name, is_global, template_data")
+      .order("is_global", { ascending: false })
+      .order("name", { ascending: true }),
+    supabase
+      .from("user_presets")
+      .select("id, name, updated_at")
+      .order("updated_at", { ascending: false })
+  ]);
+
+  const tones = tonesResult.data ?? [];
+  const audiences = audiencesResult.data ?? [];
+  const palettesRaw = palettesResult.data ?? [];
+  const templatesRaw = templatesResult.data ?? [];
+  const presets = presetsResult.data ?? [];
+
+  const paletteOptions = palettesRaw
+    .map((p) => {
+      const palette = parsePaletteV1(p.palette_data);
+      if (!palette) return null;
+      return { ...p, palette };
+    })
+    .filter(
+      (value): value is (typeof palettesRaw)[number] & { palette: PaletteV1 } =>
+        Boolean(value)
+    );
+
+  const visualTemplateMeta = templatesRaw
+    .filter((t) => isTemplateVisualV1(t.template_data))
+    .map((t) => {
+      const data = t.template_data as {
+        visual?: { slides?: unknown[]; global?: Record<string, unknown> };
+      };
+      const slidesCount = Array.isArray(data.visual?.slides)
+        ? data.visual?.slides?.length ?? null
+        : null;
+      const palette = parsePaletteV1(
+        data.visual && typeof data.visual.global === "object"
+          ? (data.visual.global as Record<string, unknown>).paletteData
+          : null
+      );
+      const prompt = extractTemplatePrompt(t.template_data);
+      return {
+        id: t.id,
+        name: t.name,
+        kind: "visual" as const,
+        slidesCount,
+        palette,
+        prompt
+      };
+    });
+
+  const layoutTemplateMeta = templatesRaw
+    .filter((t) => isTemplateDataV1(t.template_data))
+    .map((t) => ({
+      id: t.id,
+      name: t.name,
+      kind: "layout" as const,
+      slidesCount: null,
+      palette: null
+    }));
+
+  const builtinTemplateMeta = BUILTIN_TEMPLATES.map((t) => ({
+    id: t.id,
+    name: t.name,
+    kind: "builtin" as const,
+    slidesCount: null,
+    palette: null
+  }));
+
+  const labels = {
+    title: t(locale, "newCarousel.title"),
+    subtitle: t(locale, "newCarousel.subtitle"),
+    inputMode: t(locale, "newCarousel.inputMode"),
+    inputModeTopic: t(locale, "newCarousel.inputModeTopic"),
+    inputModePrompt: t(locale, "newCarousel.inputModePrompt"),
+    slides: t(locale, "newCarousel.slides"),
+    topic: t(locale, "newCarousel.topic"),
+    prompt: t(locale, "newCarousel.prompt"),
+    tone: t(locale, "newCarousel.tone"),
+    audience: t(locale, "newCarousel.audience"),
+    language: t(locale, "newCarousel.language"),
+    templateId: t(locale, "newCarousel.templateId"),
+    presetId: t(locale, "newCarousel.presetId"),
+    palette: t(locale, "newCarousel.palette"),
+    paletteBackground: t(locale, "newCarousel.paletteBackground"),
+    paletteText: t(locale, "newCarousel.paletteText"),
+    paletteAccent: t(locale, "newCarousel.paletteAccent"),
+    create: t(locale, "newCarousel.create")
+  };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-xl font-semibold">{t(locale, "newCarousel.title")}</h1>
-        <p className="text-sm text-slate-600">
-          {t(locale, "newCarousel.subtitle")}
-        </p>
-      </div>
-
-      {error ? (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          {error}
-        </div>
-      ) : null}
-
-      <form action={createCarousel} className="space-y-4 rounded-md border p-4">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.inputMode")}
-            </span>
-            <select
-              className="w-full rounded-md border px-3 py-2"
-              name="inputMode"
-              defaultValue="topic"
-            >
-              <option value="topic">{t(locale, "newCarousel.inputModeTopic")}</option>
-              <option value="prompt">{t(locale, "newCarousel.inputModePrompt")}</option>
-            </select>
-          </label>
-
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.slides")}
-            </span>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              name="slidesCount"
-              type="number"
-              min={2}
-              max={10}
-              defaultValue={5}
-              required
-            />
-          </label>
-        </div>
-
-        <label className="block space-y-2">
-          <span className="text-sm font-medium">{t(locale, "newCarousel.topic")}</span>
-          <input className="w-full rounded-md border px-3 py-2" name="topic" />
-        </label>
-
-        <label className="block space-y-2">
-          <span className="text-sm font-medium">{t(locale, "newCarousel.prompt")}</span>
-          <textarea
-            className="w-full rounded-md border px-3 py-2"
-            name="prompt"
-            rows={4}
-          />
-        </label>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">{t(locale, "newCarousel.tone")}</span>
-            <input className="w-full rounded-md border px-3 py-2" name="tone" />
-          </label>
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.audience")}
-            </span>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              name="targetAudience"
-            />
-          </label>
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.language")}
-            </span>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              name="language"
-              defaultValue={defaultDraftLanguage}
-            />
-          </label>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.templateId")}
-            </span>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              name="templateId"
-            />
-          </label>
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.presetId")}
-            </span>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              name="presetId"
-            />
-          </label>
-        </div>
-
-        <div className="space-y-3 rounded-md border p-3">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" name="creatorEnabled" />
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.creatorInfo")}
-            </span>
-          </label>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.creatorName")}
-              </span>
-              <input
-                className="w-full rounded-md border px-3 py-2"
-                name="creatorName"
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.creatorHandle")}
-              </span>
-              <input
-                className="w-full rounded-md border px-3 py-2"
-                name="creatorHandle"
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.creatorRole")}
-              </span>
-              <input
-                className="w-full rounded-md border px-3 py-2"
-                name="creatorRole"
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="space-y-3 rounded-md border p-3">
-          <div className="text-sm font-medium">{t(locale, "newCarousel.palette")}</div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.paletteBackground")}
-              </span>
-              <input
-                className="w-full rounded-md border px-3 py-2"
-                name="paletteBackground"
-                placeholder="#ffffff"
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.paletteText")}
-              </span>
-              <input
-                className="w-full rounded-md border px-3 py-2"
-                name="paletteText"
-                placeholder="#111827"
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.paletteAccent")}
-              </span>
-              <input
-                className="w-full rounded-md border px-3 py-2"
-                name="paletteAccent"
-                placeholder="#a78bfa"
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="space-y-3 rounded-md border p-3">
-          <div className="text-sm font-medium">
-            {t(locale, "newCarousel.referencesTitle")}
-          </div>
-          <p className="text-xs text-slate-600">
-            {t(locale, "newCarousel.referenceHint")}
-          </p>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.styleReferences")}
-              </span>
-              <input
-                className="w-full"
-                type="file"
-                name="styleReferences"
-                accept="image/*"
-                multiple
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">
-                {t(locale, "newCarousel.contentReferences")}
-              </span>
-              <input
-                className="w-full"
-                type="file"
-                name="contentReferences"
-                accept="image/*"
-                multiple
-              />
-            </label>
-          </div>
-
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">
-              {t(locale, "newCarousel.similarity")}
-            </span>
-            <div className="flex items-center gap-3">
-              <input
-                className="w-full"
-                type="range"
-                name="referenceSimilarity"
-                min={0}
-                max={100}
-                defaultValue={70}
-              />
-            </div>
-            <p className="text-xs text-slate-600">
-              {t(locale, "newCarousel.similarityHint")}
-            </p>
-          </label>
-        </div>
-
-        <button
-          className="w-full rounded-md bg-black px-3 py-2 text-white"
-          type="submit"
-        >
-          {t(locale, "newCarousel.create")}
-        </button>
-      </form>
-    </div>
+    <NewCarouselForm
+      action={createCarousel}
+      error={error}
+      defaultDraftLanguage={defaultDraftLanguage}
+      tones={tones}
+      audiences={audiences}
+      templates={[...visualTemplateMeta, ...layoutTemplateMeta, ...builtinTemplateMeta]}
+      presets={presets}
+      palettes={paletteOptions}
+      labels={labels}
+    />
   );
 }
