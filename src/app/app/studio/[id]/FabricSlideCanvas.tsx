@@ -1518,6 +1518,9 @@ const FabricSlideCanvas = React.forwardRef<FabricSlideCanvasHandle, Props>(
         styles?: Record<string, unknown>;
         selectionStart?: number;
         selectionEnd?: number;
+        width?: number;
+        left?: number;
+        top?: number;
         setSelectionStyles?: (
           styles: Record<string, unknown>,
           start?: number,
