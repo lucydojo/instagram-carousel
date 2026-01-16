@@ -14,6 +14,12 @@ const safeZoneSchema = z.object({
   h: z.number().min(0).max(1)
 });
 
+const optionalText = (max: number) =>
+  z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.string().trim().max(max).optional()
+  );
+
 const imageRequestSchema = z
   .object({
     slotId: z.string().trim().min(1).optional(),
@@ -34,10 +40,10 @@ const imageRequestSchema = z
   );
 
 const slideTextSchema = z.object({
-  tagline: z.string().trim().max(140).optional(),
+  tagline: optionalText(140),
   title: z.string().trim().min(1).max(140),
-  body: z.string().trim().max(800).optional(),
-  cta: z.string().trim().max(140).optional()
+  body: optionalText(800),
+  cta: optionalText(140)
 });
 
 const slidePlanSchema = z.object({

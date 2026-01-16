@@ -26,12 +26,15 @@ import {
 } from "@/lib/studio/templates";
 
 type ReferenceImageInput = { mimeType: string; data: string; name: string; kind: "style" | "content" };
+type TextStyleMap = Record<string, Record<string, Record<string, unknown>>>;
 
 const generationDebugEnabled = () =>
   process.env.GENERATION_DEBUG === "1" || process.env.NODE_ENV === "development";
 
 const truncateText = (value: string, max = 220) =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
+
+const DEFAULT_MARKER_COLOR = "#f5e663";
 
 function normalizeImageMimeType(mimeType: string | null, filename: string | null) {
   const raw = typeof mimeType === "string" ? mimeType.trim().toLowerCase() : "";
@@ -44,6 +47,119 @@ function normalizeImageMimeType(mimeType: string | null, filename: string | null
   if (ext === "webp") return "image/webp";
   if (ext === "gif") return "image/gif";
   return null;
+}
+
+function normalizeTextForAlignment(
+  value: string,
+  alignment: "left" | "center" | "right" | "justify" | null | undefined
+) {
+  if (alignment !== "center" && alignment !== "right") return value;
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n");
+}
+
+function normalizeTextAlign(value: unknown): "left" | "center" | "right" | "justify" {
+  return value === "center" || value === "right" || value === "justify" ? value : "left";
+}
+
+function parseTextWithInlineStyles(input: {
+  text: string;
+  alignment?: "left" | "center" | "right" | "justify" | null;
+  markerColor?: string | null;
+}) {
+  const raw = normalizeTextForAlignment(input.text, input.alignment);
+  if (!raw || !raw.includes("<")) {
+    return { text: raw, styles: null, hasMarkup: false };
+  }
+
+  const markerColor = input.markerColor ?? DEFAULT_MARKER_COLOR;
+  const styles: TextStyleMap = {};
+  let lineIndex = 0;
+  let charIndex = 0;
+  let hasMarkup = false;
+  let boldDepth = 0;
+  let underlineDepth = 0;
+  let markerDepth = 0;
+  let italicDepth = 0;
+
+  const pushStyle = () => {
+    if (boldDepth === 0 && underlineDepth === 0 && markerDepth === 0 && italicDepth === 0) {
+      return null;
+    }
+    const entry: Record<string, unknown> = {};
+    if (boldDepth > 0) entry.fontWeight = 700;
+    if (underlineDepth > 0) entry.underline = true;
+    if (italicDepth > 0) entry.fontStyle = "italic";
+    if (markerDepth > 0) entry.textBackgroundColor = markerColor;
+    return entry;
+  };
+
+  const pushChar = (ch: string) => {
+    if (ch === "\n") {
+      output.push(ch);
+      lineIndex += 1;
+      charIndex = 0;
+      return;
+    }
+    output.push(ch);
+    const entry = pushStyle();
+    if (entry) {
+      const lineKey = String(lineIndex);
+      const charKey = String(charIndex);
+      if (!styles[lineKey]) styles[lineKey] = {};
+      styles[lineKey]![charKey] = entry;
+    }
+    charIndex += 1;
+  };
+
+  const pushText = (segment: string) => {
+    for (const ch of segment) {
+      pushChar(ch);
+    }
+  };
+
+  const output: string[] = [];
+  const tagRegex = /<\/?[^>]+>/g;
+  let lastIndex = 0;
+  for (const match of raw.matchAll(tagRegex)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      pushText(raw.slice(lastIndex, index));
+    }
+    const tag = match[0];
+    const inner = tag.replace(/[<>]/g, "").trim();
+    const isClosing = inner.startsWith("/");
+    const name = inner.replace(/^\/+/, "").split(/\s+/)[0]?.toLowerCase();
+
+    if (name === "br") {
+      hasMarkup = true;
+      pushChar("\n");
+    } else if (name === "mark") {
+      hasMarkup = true;
+      markerDepth = Math.max(0, markerDepth + (isClosing ? -1 : 1));
+    } else if (name === "u") {
+      hasMarkup = true;
+      underlineDepth = Math.max(0, underlineDepth + (isClosing ? -1 : 1));
+    } else if (name === "b" || name === "strong") {
+      hasMarkup = true;
+      boldDepth = Math.max(0, boldDepth + (isClosing ? -1 : 1));
+    } else if (name === "i" || name === "em") {
+      hasMarkup = true;
+      italicDepth = Math.max(0, italicDepth + (isClosing ? -1 : 1));
+    } else {
+      pushText(tag);
+    }
+    lastIndex = index + tag.length;
+  }
+  if (lastIndex < raw.length) {
+    pushText(raw.slice(lastIndex));
+  }
+
+  const text = output.join("");
+  const cleanedStyles = Object.keys(styles).length > 0 ? styles : null;
+  return { text, styles: cleanedStyles, hasMarkup };
 }
 
 const summarizePlan = (plan: PlannerOutput) => ({
@@ -302,6 +418,9 @@ function buildPlannerPrompt(input: {
     "Referências visuais (imagens) serão anexadas após o texto.",
     "Use as referências de estilo conforme o nível de similaridade pedido.",
     "Não copie conteúdo literal de referências.",
+    "Para ênfase no texto, use tags: <mark>marca texto</mark>, <u>sublinhado</u>, <b>negrito</b>.",
+    "Não use outras tags nem deixe as tags aparecerem fora do texto.",
+    "Nos prompts de imagem, não mencione marca texto, sublinhado, tipografia ou layout do texto.",
     input.templatePrompt
       ? "Siga as instruções em `templateInstructions` para preencher textos e imagens."
       : null,
@@ -468,11 +587,17 @@ function toEditorStateFromPlan(input: {
       const isTitle = key === "title";
       const isCta = key === "cta";
       const isTagline = key === "tagline";
+      const markerColor = palette.accent ?? DEFAULT_MARKER_COLOR;
+      const parsed = parseTextWithInlineStyles({
+        text,
+        alignment,
+        markerColor
+      });
       objects.push({
         id: key,
         type: "text",
         variant: key,
-        text,
+        text: parsed.text,
         x: rect.x,
         y: rect.y,
         width: rect.w,
@@ -486,7 +611,9 @@ function toEditorStateFromPlan(input: {
         lineHeight: isTitle ? lineHeightTight : lineHeightNormal,
         underline: false,
         linethrough: false,
-        letterSpacing: 0
+        letterSpacing: 0,
+        markerColor,
+        styles: parsed.hasMarkup ? parsed.styles ?? undefined : undefined
       });
     };
 
@@ -603,9 +730,29 @@ function applyPlanToVisualTemplate(input: {
         if (!variant || !textMap || !(variant in textMap)) return obj;
         const nextText = textMap[variant as keyof typeof textMap];
         if (typeof nextText === "string" && nextText.trim().length > 0) {
-          return { ...obj, text: nextText, hidden: false };
+          const markerColor =
+            typeof (obj as { markerColor?: unknown }).markerColor === "string"
+              ? (obj as { markerColor: string }).markerColor
+              : typeof (obj as { textBackgroundColor?: unknown }).textBackgroundColor ===
+                  "string"
+                ? (obj as { textBackgroundColor: string }).textBackgroundColor
+                : DEFAULT_MARKER_COLOR;
+          const alignment = normalizeTextAlign(
+            (obj as { textAlign?: unknown }).textAlign
+          );
+          const parsed = parseTextWithInlineStyles({
+            text: nextText,
+            alignment,
+            markerColor
+          });
+          return {
+            ...obj,
+            text: parsed.text,
+            hidden: false,
+            styles: parsed.hasMarkup ? parsed.styles ?? undefined : undefined
+          };
         }
-        return { ...obj, text: "", hidden: true };
+        return { ...obj, text: "", hidden: true, styles: undefined };
       }
       if (obj.type === "image") {
         const rawId = typeof obj.id === "string" ? obj.id : null;
@@ -730,6 +877,10 @@ export async function generateFirstDraftForCarousel(input: {
   const template = templateBundle.layout;
   const visualTemplate = templateBundle.visual;
   const templatePrompt = templateBundle.prompt;
+  const templateInstructions =
+    templatePrompt && typeof topicOrPrompt === "string" && topicOrPrompt.includes(templatePrompt)
+      ? null
+      : templatePrompt;
 
   const palette = resolvePaletteFromDraft(draft) ?? resolvePaletteFromVisual(visualTemplate);
   const referenceSimilarityRaw = Number(draft.referenceSimilarity ?? 70);
@@ -780,7 +931,7 @@ export async function generateFirstDraftForCarousel(input: {
       typeof draft.targetAudience === "string" ? draft.targetAudience : undefined,
     language: typeof draft.language === "string" ? draft.language : undefined,
     template,
-    templatePrompt,
+    templatePrompt: templateInstructions,
     palette,
     creator:
       draft.creatorInfo && typeof draft.creatorInfo === "object"
